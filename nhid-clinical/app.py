@@ -106,7 +106,10 @@ async def process_pipeline(request: Request) -> str:
 
     try:
         form = await request.form()
-        session_id = (form.get("CallSid") or "unknown").strip()
+        _raw_callsid = form.get("CallSid")
+        if _raw_callsid is None or str(_raw_callsid).strip() == "":
+            raise HTTPException(status_code=400, detail="CallSid is required")
+        session_id = str(_raw_callsid).strip()
         message_sid = (form.get("MessageSid") or "").strip()
         raw_text = form.get("SpeechResult")
         user_text = " ".join((raw_text or "").split())
@@ -264,12 +267,20 @@ async def process(request: Request):
 
 
 @app.get("/debug/replay/{session_id}")
-async def debug_replay(session_id: str):
+@app.post("/debug/replay/{session_id}")
+async def debug_replay(session_id: str, request: Request):
     """DEBUG ENDPOINT: Full forensic trace.
 
     Returns complete call replay for audit + debugging.
+    GET  → JSON event trace (forensic/audit view)
+    POST → last TwiML response for the session (determinism check)
     """
     try:
+        if request.method == "POST":
+            events = get_events(session_id)
+            for ev in reversed(events):
+                if ev.get("event_type") == "RESPONSE" and ev.get("response_text"):
+                    return Response(content=ev["response_text"], media_type="application/xml")
         trace = get_session_trace(session_id)
         return JSONResponse(trace)
     except Exception:
