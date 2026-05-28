@@ -1,0 +1,20 @@
+@import url('https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  --nhid-bg: #070c17;
+  --nhid-surface: rgba(255,255,255,0.04);
+  --nhid-surface-hover: rgba(255,255,255,0.07);
+  --nhid-border: rgba(0,194,168,0.18);
+  --nhid-border-bright: rgba(0,194,168,0.45);
+  --nhid-teal: #00c2a8;
+  --nhid-cyan: #53d8fb;
+  --nhid-teal-glow: rgba(0,194,168,0.25);
+  --nhid-cyan-glow: rgba(83,216,251,0.18);
+  --nhid-text: #e8f0f7;
+  --nhid-muted: #8899b0;
+  --nhid-subtle: #1c2a3a;
+  --nhid-sidebar-w: 240px;
+  --nhid-radius: 12px;
+}
+
+* { font-family: 'Raleway', system-ui, sans-serif; box-sizing: border-box; }
