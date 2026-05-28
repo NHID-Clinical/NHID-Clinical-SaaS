@@ -10,8 +10,7 @@ export interface OrgProfile {
   org_name: string;
   plan: Plan;
   status: OrgStatus;
-  stripe_customer_id: string | null;
-  stripe_subscription_id: string | null;
+  billing_active: boolean;
   plan_details: PlanDetails;
   created_at: string;
   usage_count: number;

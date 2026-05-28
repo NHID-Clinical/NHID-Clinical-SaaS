@@ -178,7 +178,7 @@ export default function Dashboard() {
         <StatCard
           label="Subscription"
           value={profile.status === "active" ? "Active" : profile.status}
-          sub={profile.stripe_subscription_id ? "Stripe managed" : "Self-service"}
+          sub={profile.billing_active ? "Stripe managed" : "Self-service"}
           icon={Activity}
         />
       </div>

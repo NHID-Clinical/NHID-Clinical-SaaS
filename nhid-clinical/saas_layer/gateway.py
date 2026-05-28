@@ -115,10 +115,6 @@ def get_current_org(x_api_key: Optional[str] = Header(default=None)) -> Dict[str
     return org
 
 
-def require_admin(x_admin_key: Optional[str] = Header(default=None)) -> None:
-    if x_admin_key != _ADMIN_KEY:
-        raise HTTPException(status_code=403, detail="Admin key required")
-
 
 def require_admin_session(x_admin_session: Optional[str] = Header(default=None)) -> str:
     """Validate an admin session token (SQLite-backed, survives restarts)."""
@@ -196,6 +192,7 @@ async def health():
     stripe_mode = _probe_stripe()
     nhid_ok = nhid_client.is_reachable()
     db_ok = _probe_db()
+    stats = get_global_stats()
     return {
         "status": "ok",
         "environment": "production" if _is_production() else "development",
@@ -203,6 +200,7 @@ async def health():
         "stripe": stripe_mode,
         "db": "healthy" if db_ok else "error",
         "admin": "active",
+        "org_count": stats.get("total_orgs", 0),
     }
 
 
@@ -237,14 +235,16 @@ class CreateOrgRequest(BaseModel):
     plan: str = "free"
 
 
-@app.post("/saas/admin/orgs", dependencies=[Depends(require_admin)])
-async def admin_create_org(body: CreateOrgRequest):
+@app.post("/saas/admin/orgs")
+async def admin_create_org(body: CreateOrgRequest, _token: str = Depends(require_admin_session)):
+    """Create an org with a specific plan. Session auth required."""
     org = create_org(body.org_name, body.plan)
     return org
 
 
-@app.get("/saas/admin/orgs", dependencies=[Depends(require_admin)])
-async def admin_list_orgs():
+@app.get("/saas/admin/orgs")
+async def admin_list_orgs(_token: str = Depends(require_admin_session)):
+    """List all orgs. Session auth required."""
     return {"orgs": list_orgs(), "global_stats": get_global_stats()}
 
 
@@ -291,8 +291,7 @@ async def get_my_org(org: Dict = Depends(get_current_org)):
         "org_name": org["org_name"],
         "plan": org["plan"],
         "status": org.get("status", "active"),
-        "stripe_customer_id": org.get("stripe_customer_id"),
-        "stripe_subscription_id": org.get("stripe_subscription_id"),
+        "billing_active": bool(org.get("stripe_subscription_id")),
         "plan_details": plan,
         "created_at": org["created_at"],
         "usage_count": org["usage_count"],
@@ -318,6 +317,19 @@ async def billing_checkout(body: CheckoutRequest, org: Dict = Depends(get_curren
             status_code=400,
             detail=f"Invalid plan '{body.plan}'. Must be one of: {', '.join(sorted(allowed_plans))}",
         )
+    # In live mode, block checkout if webhook secret is not configured.
+    # Without webhook verification, subscription events cannot be trusted.
+    try:
+        _secret_key = get_secret_key()
+        if _secret_key and _secret_key.startswith("sk_live_") and not os.environ.get("STRIPE_WEBHOOK_SECRET"):
+            raise HTTPException(
+                status_code=503,
+                detail="Billing is not fully configured. Please contact support.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     try:
         url = create_checkout_session(
             org_id=org["org_id"],
@@ -460,10 +472,10 @@ async def saas_proof(session_id: str, org: Dict = Depends(subscription_gated_org
             "event_count": proof.get("event_count", len(events)),
             "trace": {"events": events},
         }
-    except nhid_client.NHIDClientError as exc:
-        raise HTTPException(status_code=502, detail=f"NHID Bridge error: {exc}")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    except nhid_client.NHIDClientError:
+        raise HTTPException(status_code=502, detail="Audit service temporarily unavailable.")
+    except Exception:
+        raise HTTPException(status_code=500, detail="An error occurred retrieving the audit trail.")
 
 
 # ── Usage: stats + activity ───────────────────────────────────────────────────
@@ -486,8 +498,8 @@ async def saas_recent(limit: int = 20, org: Dict = Depends(get_current_org)):
 async def saas_replay(session_id: str, org: Dict = Depends(subscription_gated_org)):
     try:
         events = nhid_client.get_events(session_id)
-    except nhid_client.NHIDClientError as exc:
-        raise HTTPException(status_code=502, detail=f"NHID Bridge error: {exc}")
+    except nhid_client.NHIDClientError:
+        raise HTTPException(status_code=502, detail="Audit service temporarily unavailable.")
     log_request(org["org_id"], f"/saas/replay/{session_id}", "GET", 200, session_id)
     return {"session_id": session_id, "events": events, "event_count": len(events)}
 

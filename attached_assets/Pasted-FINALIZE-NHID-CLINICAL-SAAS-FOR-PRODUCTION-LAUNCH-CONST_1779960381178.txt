@@ -1,0 +1,199 @@
+FINALIZE NHID CLINICAL SAAS FOR PRODUCTION LAUNCH
+
+CONSTRAINTS (NON-NEGOTIABLE):
+- NHID Core (port 8000) MUST NOT be modified
+- NHID Core tests MUST remain 43/0/0
+- NO changes to tests/
+- NO reintroduction of Bridge service or HTTP dependency to internal core
+- SaaS Gateway is the ONLY backend control plane
+- All production logic must live in SaaS layer only
+
+---
+
+🎯 GOAL:
+Convert system into fully deployable, Stripe-enabled SaaS with:
+- clean separation of concerns
+- production-safe deployment model
+- zero dev/debug leakage
+- stable admin + billing + API access control
+
+---
+
+## 1. FINAL ARCHITECTURE CHECK
+
+Ensure system runs exactly as:
+
+Frontend (React /nhid-saas)
+        ↓
+SaaS Gateway (FastAPI, port 8010)
+        ↓
+NHID Core (in-process module import ONLY)
+        ↓
+SQLite (saas.db)
+
+Stripe → SaaS Gateway (webhooks only)
+
+❌ MUST CONFIRM:
+- no localhost:8001 references anywhere
+- no Bridge service dependency
+- no HTTP calls between SaaS and NHID Core
+
+---
+
+## 2. STRIPE (LIVE MODE READINESS)
+
+Verify:
+- STRIPE_SECRET_KEY is live key (sk_live_)
+- STRIPE_WEBHOOK_SECRET is configured
+- webhook endpoint is registered in Stripe dashboard:
+
+  /saas/billing/webhook
+
+Confirm handling of ONLY:
+- checkout.session.completed
+- invoice.paid
+- customer.subscription.updated
+- customer.subscription.deleted
+
+Stripe must ONLY control:
+- org.plan
+- org.status (active/canceled)
+
+---
+
+## 3. AUTH SYSTEM
+
+Confirm:
+- X-API-Key required for all /saas/* routes (except health + billing webhook)
+- Admin login uses:
+  - ADMIN_USER
+  - ADMIN_PASS
+
+Admin rules:
+- session tokens stored in SQLite or in-memory with TTL
+- admin is NOT accessible via API keys
+- admin portal is isolated from org users
+
+---
+
+## 4. BILLING ENFORCEMENT
+
+Middleware must enforce:
+
+IF route starts with /saas AND NOT admin:
+- check org status == "active"
+- IF not active → return HTTP 402
+
+Free tier:
+- max 100 requests/day
+- enforced via usage_logs table
+
+---
+
+## 5. DATABASE FINAL STATE (saas.db)
+
+Must contain ONLY:
+
+TABLE: orgs
+- org_id
+- api_key
+- plan
+- status
+- stripe_customer_id
+- stripe_subscription_id
+
+TABLE: usage_logs
+- org_id
+- endpoint
+- timestamp
+
+TABLE: admin_sessions
+- token
+- expiry
+
+---
+
+## 6. HEALTH CHECKS
+
+Ensure these endpoints exist and are correct:
+
+GET /health
+- returns:
+  - nhid_core: reachable (import check)
+  - stripe: configured
+  - org_count
+
+GET /saas/system/status
+- full system snapshot:
+  - nhid status
+  - saas status
+  - stripe status
+  - usage totals
+
+---
+
+## 7. FRONTEND FINAL STATE
+
+Verify React app:
+
+Routes:
+- / onboarding
+- /dashboard
+- /usage
+- /trace
+- /proof
+- /admin
+
+Must include:
+- Raleway font
+- dark theme (#070c17)
+- teal primary (#00c2a8)
+- cyan accents (#53d8fb)
+
+NO debug UI, NO dev logs, NO placeholders.
+
+---
+
+## 8. SECURITY CLEANUP
+
+Ensure:
+- no exposed admin endpoints without session
+- no debug routes in production
+- no unprotected internal data leaks
+- Stripe webhook signature validation enabled
+
+---
+
+## 9. DEPLOYMENT FINALIZATION
+
+Confirm:
+- SaaS Gateway is single entry backend service
+- React frontend is production build
+- NHID Core runs only as internal module
+- Stripe fully wired in live mode
+- system can run with ONLY:
+  - frontend
+  - SaaS gateway
+  - NHID core (in-process)
+
+---
+
+## 10. ACCEPTANCE CRITERIA
+
+Deployment is VALID ONLY IF:
+
+✔ 43/0/0 NHID tests unchanged
+✔ Stripe checkout completes successfully
+✔ webhook updates org status to active
+✔ API blocked when inactive (402 enforced)
+✔ admin login works via env credentials
+✔ no Bridge / 8001 dependency exists anywhere
+✔ system runs as single backend SaaS gateway
+
+---
+
+OUTPUT:
+- final deployment patch
+- no architecture regression
+- no test modifications
+- production-safe SaaS ready for launch
