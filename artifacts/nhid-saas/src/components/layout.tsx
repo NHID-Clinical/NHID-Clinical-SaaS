@@ -28,8 +28,8 @@ const NHIDLogoMark = ({ size = 32 }: { size?: number }) => (
 
 const NAV_ITEMS = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Trace", href: "/trace", icon: Shield },
-  { name: "Proof", href: "/proof", icon: Search },
+  { name: "Audit Trail", href: "/trace", icon: Shield },
+  { name: "Verification", href: "/proof", icon: Search },
   { name: "Usage", href: "/usage", icon: BarChart2 },
 ];
 

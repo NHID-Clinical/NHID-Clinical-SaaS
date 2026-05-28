@@ -182,7 +182,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
             <NHIDMark size={52} />
           </div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "#e0e8f4", marginBottom: 4, letterSpacing: "-0.01em" }}>
-            NHID Admin Portal
+            Operations Console
           </div>
           <div style={{ fontSize: 12, color: "#7a8fa8", display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
             <Lock size={11} />
@@ -411,7 +411,7 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <NHIDMark size={28} />
-          <span style={{ fontWeight: 800, fontSize: 14, color: "#e0e8f4" }}>NHID Admin</span>
+          <span style={{ fontWeight: 800, fontSize: 14, color: "#e0e8f4" }}>Operations Console</span>
           <span
             style={{
               fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 12,

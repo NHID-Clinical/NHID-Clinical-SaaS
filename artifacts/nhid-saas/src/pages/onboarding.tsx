@@ -8,21 +8,11 @@ import { Copy, Check, Eye, EyeOff } from "lucide-react";
 import { useCreateOrg, useApiKey } from "@/hooks/use-nhid";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
-import type { Plan } from "@/lib/api";
 
 const schema = z.object({
-  orgName: z.string().min(2, "Organization name must be at least 2 characters."),
-  plan: z.enum(["free", "l1", "l2", "l3"]),
-  adminKey: z.string().min(5, "Provisioning key is required."),
+  orgName: z.string().min(2, "Organization name must be at least 2 characters.").max(120),
 });
 type FormValues = z.infer<typeof schema>;
-
-const PLANS: { id: Plan; name: string; price: string; calls: string; desc: string }[] = [
-  { id: "free", name: "Free", price: "$0", calls: "100 calls/day", desc: "Explore the audit core" },
-  { id: "l1", name: "L1 Starter", price: "$99/mo", calls: "10k calls/day", desc: "For small clinical teams" },
-  { id: "l2", name: "L2 Pro", price: "$499/mo", calls: "100k calls/day", desc: "For health systems" },
-  { id: "l3", name: "L3 Enterprise", price: "$2,500/mo", calls: "Unlimited", desc: "Maximum compliance" },
-];
 
 const NHIDLogo = () => (
   <div style={{ textAlign: "center", marginBottom: 36 }}>
@@ -171,7 +161,6 @@ export default function Onboarding() {
   const { toast } = useToast();
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [createdOrg, setCreatedOrg] = useState<string>("");
-  const [showPw, setShowPw] = useState(false);
 
   useEffect(() => {
     if (apiKey && !createdKey) setLocation("/dashboard");
@@ -179,24 +168,20 @@ export default function Onboarding() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      orgName: "",
-      plan: "free",
-      adminKey: "nhid-admin-key-dev",
-    },
+    defaultValues: { orgName: "" },
   });
 
   const onSubmit = (data: FormValues) => {
-    createOrg.mutate(data, {
+    createOrg.mutate({ orgName: data.orgName }, {
       onSuccess: (res) => {
         setCreatedOrg(data.orgName);
         setCreatedKey(res.api_key);
-        toast({ title: "Organization created", description: "API key securely stored." });
+        toast({ title: "Workspace created", description: "Your API key is ready." });
       },
-      onError: (err: any) => {
+      onError: () => {
         toast({
-          title: "Failed to create organization",
-          description: err.message || "Unknown error",
+          title: "Could not create workspace",
+          description: "Please try again in a moment.",
           variant: "destructive",
         });
       },
@@ -204,7 +189,6 @@ export default function Onboarding() {
   };
 
   const watchOrgName = form.watch("orgName");
-  const selectedPlan = form.watch("plan");
 
   return (
     <div
@@ -242,7 +226,7 @@ export default function Onboarding() {
       />
 
       {/* Card */}
-      <div style={{ width: "100%", maxWidth: 500, position: "relative", zIndex: 1 }}>
+      <div style={{ width: "100%", maxWidth: 460, position: "relative", zIndex: 1 }}>
         <NHIDLogo />
 
         <div
@@ -262,18 +246,17 @@ export default function Onboarding() {
             />
           ) : (
             <>
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: "var(--nhid-text)", letterSpacing: "-0.01em", marginBottom: 4 }}>
-                  Initialize Workspace
+              <div style={{ marginBottom: 28 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: "var(--nhid-text)", letterSpacing: "-0.01em", marginBottom: 6 }}>
+                  Create your workspace
                 </div>
-                <div style={{ fontSize: 12, color: "var(--nhid-muted)", lineHeight: 1.6 }}>
-                  Provision your organization on the NHID audit infrastructure.
+                <div style={{ fontSize: 12, color: "var(--nhid-muted)", lineHeight: 1.7 }}>
+                  Get started free. Upgrade to a paid plan any time from your dashboard.
                 </div>
               </div>
 
               <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-
+                <form onSubmit={form.handleSubmit(onSubmit)} style={{ display: "flex", flexDirection: "column", gap: 20 }}>
                   <FormField
                     control={form.control}
                     name="orgName"
@@ -286,9 +269,10 @@ export default function Onboarding() {
                           <input
                             {...field}
                             placeholder="e.g. MemorialHealth AI"
+                            autoFocus
                             data-testid="input-orgname"
                             style={{
-                              width: "100%", padding: "11px 14px", borderRadius: 9,
+                              width: "100%", padding: "12px 14px", borderRadius: 9,
                               background: "rgba(255,255,255,0.05)", border: "1px solid var(--nhid-border)",
                               color: "var(--nhid-text)", fontSize: 14, outline: "none",
                               fontFamily: "'Raleway', sans-serif",
@@ -303,99 +287,25 @@ export default function Onboarding() {
                     )}
                   />
 
-                  {/* Plan selector */}
-                  <FormField
-                    control={form.control}
-                    name="plan"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nhid-muted)" }}>
-                          Select Plan
-                        </FormLabel>
-                        <FormControl>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }} data-testid="select-plan">
-                            {PLANS.map((p) => (
-                              <div
-                                key={p.id}
-                                onClick={() => field.onChange(p.id)}
-                                style={{
-                                  display: "flex", alignItems: "center", gap: 12,
-                                  padding: "12px 14px", borderRadius: 10, cursor: "pointer",
-                                  border: `1px solid ${selectedPlan === p.id ? "var(--nhid-border-bright)" : "var(--nhid-border)"}`,
-                                  background: selectedPlan === p.id ? "rgba(0,194,168,0.08)" : "rgba(255,255,255,0.02)",
-                                  transition: "all 0.15s",
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
-                                    border: `2px solid ${selectedPlan === p.id ? "var(--nhid-teal)" : "var(--nhid-muted)"}`,
-                                    display: "flex", alignItems: "center", justifyContent: "center",
-                                  }}
-                                >
-                                  {selectedPlan === p.id && (
-                                    <div style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--nhid-teal)" }} />
-                                  )}
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                  <div style={{ fontSize: 12, fontWeight: 700, color: selectedPlan === p.id ? "var(--nhid-text)" : "var(--nhid-muted)" }}>
-                                    {p.name}
-                                  </div>
-                                  <div style={{ fontSize: 10, color: "var(--nhid-muted)" }}>
-                                    {p.desc} · {p.calls}
-                                  </div>
-                                </div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: selectedPlan === p.id ? "var(--nhid-teal)" : "var(--nhid-muted)", flexShrink: 0 }}>
-                                  {p.price}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </FormControl>
-                        <FormMessage style={{ fontSize: 11, color: "#ef4444" }} />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="adminKey"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nhid-muted)" }}>
-                          Provisioning Key
-                        </FormLabel>
-                        <FormControl>
-                          <div style={{ position: "relative" }}>
-                            <input
-                              {...field}
-                              type={showPw ? "text" : "password"}
-                              data-testid="input-adminkey"
-                              style={{
-                                width: "100%", padding: "11px 40px 11px 14px", borderRadius: 9,
-                                background: "rgba(255,255,255,0.05)", border: "1px solid var(--nhid-border)",
-                                color: "var(--nhid-text)", fontSize: 14, outline: "none",
-                                fontFamily: "'Raleway', sans-serif", fontWeight: 400,
-                              }}
-                              onFocus={e => e.target.style.borderColor = "rgba(0,194,168,0.4)"}
-                              onBlur={e => e.target.style.borderColor = "var(--nhid-border)"}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setShowPw(s => !s)}
-                              style={{
-                                position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
-                                background: "none", border: "none", cursor: "pointer", color: "var(--nhid-muted)",
-                              }}
-                            >
-                              {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
-                            </button>
-                          </div>
-                        </FormControl>
-                        <FormMessage style={{ fontSize: 11, color: "#ef4444" }} />
-                      </FormItem>
-                    )}
-                  />
+                  {/* Plan info — informational only, no form field */}
+                  <div
+                    style={{
+                      padding: "14px 16px", borderRadius: 10,
+                      background: "rgba(0,194,168,0.05)",
+                      border: "1px solid rgba(0,194,168,0.15)",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--nhid-teal)" }}>Free Plan</span>
+                      <span style={{ fontSize: 11, color: "var(--nhid-muted)" }}>$0 / month</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--nhid-muted)", lineHeight: 1.6 }}>
+                      100 audit events/day · Tamper-evident trail · Chain verification
+                    </div>
+                    <div style={{ fontSize: 10, color: "var(--nhid-muted)", marginTop: 8, opacity: 0.7 }}>
+                      Upgrade to L1 / L2 / L3 from your dashboard after sign-up.
+                    </div>
+                  </div>
 
                   <button
                     type="submit"
@@ -408,7 +318,8 @@ export default function Onboarding() {
                         : "rgba(255,255,255,0.06)",
                       border: "none",
                       color: watchOrgName.trim().length >= 2 ? "#070c17" : "var(--nhid-muted)",
-                      fontSize: 14, fontWeight: 800, cursor: createOrg.isPending ? "not-allowed" : "pointer",
+                      fontSize: 14, fontWeight: 800,
+                      cursor: createOrg.isPending ? "not-allowed" : "pointer",
                       fontFamily: "'Raleway', sans-serif",
                       boxShadow: watchOrgName.trim().length >= 2 ? "0 0 30px rgba(0,194,168,0.35)" : "none",
                       transition: "all 0.2s",
@@ -416,7 +327,7 @@ export default function Onboarding() {
                       letterSpacing: "0.01em",
                     }}
                   >
-                    {createOrg.isPending ? "Provisioning…" : "Initialize Workspace →"}
+                    {createOrg.isPending ? "Creating workspace…" : "Get Started →"}
                   </button>
                 </form>
               </Form>

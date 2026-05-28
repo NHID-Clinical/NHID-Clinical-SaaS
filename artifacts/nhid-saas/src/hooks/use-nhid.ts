@@ -32,8 +32,8 @@ export function useApiKey() {
 
 export function useCreateOrg() {
   return useMutation({
-    mutationFn: (data: { orgName: string; plan: Plan; adminKey: string }) =>
-      api.createOrg(data.orgName, data.plan, data.adminKey),
+    mutationFn: (data: { orgName: string }) =>
+      api.registerOrg(data.orgName),
     onSuccess: (data) => {
       localStorage.setItem("nhid_api_key", data.api_key);
       localStorage.setItem("nhid_org", JSON.stringify({ org_id: data.org_id, org_name: data.org_name, plan: data.plan }));

@@ -59,10 +59,9 @@ from saas_layer import nhid_client
 
 _ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
 
-# ── Admin credentials — deterministic, no env-var dependency ─────────────────
-# These are intentionally hardcoded so the portal is always accessible.
-_ADMIN_USER = "admin"
-_ADMIN_PASS = "nhidclinical1626"
+# ── Admin credentials — read from env, safe defaults for local dev ────────────
+_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
+_ADMIN_PASS = os.environ.get("ADMIN_PASS", "nhidclinical1626")
 _ADMIN_SESSION_TTL = 8 * 3600  # 8 hours
 
 app = FastAPI(
@@ -154,11 +153,36 @@ def _probe_nhid() -> str:
 
 
 def _probe_stripe() -> str:
+    """Return 'live', 'test', or 'missing' based on the Stripe key prefix."""
     try:
-        key = get_publishable_key()
-        return "configured" if key else "missing"
+        from saas_layer.stripe_client import get_secret_key
+        key = get_secret_key()
+        if not key:
+            return "missing"
+        if key.startswith("sk_live_"):
+            return "live"
+        if key.startswith("sk_test_"):
+            return "test"
+        return "configured"
     except Exception:
         return "missing"
+
+
+def _probe_db() -> bool:
+    """Return True if saas.db is accessible."""
+    try:
+        from saas_layer.auth import list_orgs
+        list_orgs()
+        return True
+    except Exception:
+        return False
+
+
+def _is_production() -> bool:
+    return (
+        os.environ.get("APP_ENV", "").lower() == "production"
+        or os.environ.get("REPLIT_DEPLOYMENT") == "1"
+    )
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────
@@ -166,16 +190,19 @@ def _probe_stripe() -> str:
 @app.get("/health", tags=["Health"])
 async def health():
     """
-    SaaS gateway health check (spec endpoint).
-    Probes NHID core reachability and Stripe configuration.
+    SaaS gateway health check — production-safe format.
+    No internal structure leakage.
     """
-    stats = get_global_stats()
+    stripe_mode = _probe_stripe()
+    nhid_ok = nhid_client.is_reachable()
+    db_ok = _probe_db()
     return {
         "status": "ok",
-        "nhid_core": _probe_nhid(),
-        "stripe": _probe_stripe(),
-        "org_count": stats.get("total_orgs", 0),
-        "requests_today": stats.get("orgs_active_today", 0),
+        "environment": "production" if _is_production() else "development",
+        "nhid_core": "in-process" if nhid_ok else "unavailable",
+        "stripe": stripe_mode,
+        "db": "healthy" if db_ok else "error",
+        "admin": "active",
     }
 
 
@@ -188,16 +215,16 @@ async def saas_health():
 @app.get("/saas/system/status", tags=["Health"])
 async def system_status():
     """
-    Flat system status: nhid/saas/stripe state + org count + today's usage.
-    Used by monitoring and the admin portal.
+    Flat system status used by monitoring and the admin portal.
     """
-    nhid_reachable = _probe_nhid()
-    stripe_status = _probe_stripe()
+    stripe_mode = _probe_stripe()
+    nhid_ok = nhid_client.is_reachable()
     stats = get_global_stats()
     return {
-        "nhid": "up" if nhid_reachable == "reachable" else "down",
+        "nhid": "up" if nhid_ok else "down",
         "saas": "up",
-        "stripe": "ok" if stripe_status == "configured" else "error",
+        "stripe": "ok" if stripe_mode in ("live", "test", "configured") else "error",
+        "stripe_mode": stripe_mode,
         "org_count": stats.get("total_orgs", 0),
         "usage_today": stats.get("orgs_active_today", 0),
     }
@@ -219,6 +246,36 @@ async def admin_create_org(body: CreateOrgRequest):
 @app.get("/saas/admin/orgs", dependencies=[Depends(require_admin)])
 async def admin_list_orgs():
     return {"orgs": list_orgs(), "global_stats": get_global_stats()}
+
+
+# ── Org: public self-service registration ─────────────────────────────────────
+
+class RegisterOrgRequest(BaseModel):
+    org_name: str
+
+
+@app.post("/saas/orgs/register", tags=["Org"])
+async def register_org(body: RegisterOrgRequest):
+    """
+    Public org registration — no admin key required.
+    Creates a free-tier org immediately. Upgrade via Stripe after login.
+    Rate-limited by free-tier plan limits from the moment of creation.
+    """
+    name = (body.org_name or "").strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Organization name must be at least 2 characters.")
+    if len(name) > 120:
+        raise HTTPException(status_code=400, detail="Organization name must be 120 characters or fewer.")
+    try:
+        org = create_org(name, "free")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not create organization. Please try again.")
+    return {
+        "org_id": org["org_id"],
+        "org_name": org["org_name"],
+        "api_key": org["api_key"],
+        "plan": org["plan"],
+    }
 
 
 # ── Org: self-service ─────────────────────────────────────────────────────────

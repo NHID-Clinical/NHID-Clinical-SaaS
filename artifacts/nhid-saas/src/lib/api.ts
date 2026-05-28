@@ -139,7 +139,14 @@ export const api = {
   /** Check if the gateway is reachable. */
   health: () => req<{ ok: boolean; service: string }>("/saas/health"),
 
-  /** Create a new org (admin operation). */
+  /** Self-service org registration — free tier, no admin key required. */
+  registerOrg: (orgName: string): Promise<CreateOrgResult> =>
+    req<CreateOrgResult>(
+      "/saas/orgs/register",
+      { method: "POST", body: JSON.stringify({ org_name: orgName }) },
+    ),
+
+  /** Create a new org (admin operation, internal only). */
   createOrg: (orgName: string, plan: Plan = "free", adminKey: string): Promise<CreateOrgResult> =>
     req<CreateOrgResult>(
       "/saas/admin/orgs",
