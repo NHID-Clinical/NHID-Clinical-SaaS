@@ -7,6 +7,8 @@ import os
 import sys
 import uuid
 import time
+import urllib.request
+import urllib.error
 
 # Ensure nhid-clinical/ is on the path so core modules are importable
 _CLINICAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,9 +46,12 @@ from nhid_policy import NHIDPolicyEngine
 
 _ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
 
-# ── Admin portal credentials (internal use only) ──────────────────────────────
-_ADMIN_USER = "admin"
-_ADMIN_PASS = "nhid-admin-2026"
+# ── NHID core base URL (SaaS pings core via HTTP for health checks) ───────────
+_NHID_BASE_URL = os.environ.get("NHID_BASE_URL", "http://localhost:8000")
+
+# ── Admin portal credentials (read from env; safe defaults for dev) ───────────
+_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
+_ADMIN_PASS = os.environ.get("ADMIN_PASS", "nhid-admin-2026")
 _ADMIN_SESSION_TTL = 8 * 3600  # 8 hours
 
 # In-memory session store: token → expiry_timestamp
@@ -110,11 +115,80 @@ def subscription_gated_org(org: Dict = Depends(get_current_org)) -> Dict[str, An
     return org
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+# ── Internal helpers ──────────────────────────────────────────────────────────
 
-@app.get("/saas/health")
+def _probe_nhid() -> str:
+    """
+    HTTP reachability probe for NHID core.
+    Any response (including 404/405) means the server is up.
+    Only a connection-level failure means unreachable.
+    """
+    try:
+        urllib.request.urlopen(f"{_NHID_BASE_URL}/", timeout=2)
+        return "reachable"
+    except urllib.error.HTTPError:
+        # Got an HTTP response — server is up even if endpoint is unknown
+        return "reachable"
+    except Exception:
+        return "unreachable"
+
+
+def _probe_stripe() -> str:
+    try:
+        key = get_publishable_key()
+        return "configured" if key else "missing"
+    except Exception:
+        return "missing"
+
+
+# ── Health endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/health", tags=["Health"])
 async def health():
-    return {"ok": True, "service": "nhid-saas-gateway", "version": "2.0.0"}
+    """
+    SaaS gateway health check (spec endpoint).
+    Probes NHID core reachability and Stripe configuration.
+    """
+    stats = get_global_stats()
+    return {
+        "status": "ok",
+        "nhid_core": _probe_nhid(),
+        "stripe": _probe_stripe(),
+        "org_count": stats.get("total_orgs", 0),
+        "requests_today": stats.get("orgs_active_today", 0),
+    }
+
+
+@app.get("/saas/health", tags=["Health"])
+async def saas_health():
+    """Backward-compatible alias for /health."""
+    return await health()
+
+
+@app.get("/saas/system/status", tags=["Health"])
+async def system_status():
+    """
+    Full system status: NHID core, SaaS layer, and Stripe.
+    Used by monitoring and the admin portal to surface service health.
+    """
+    nhid_status = _probe_nhid()
+    stripe_status = _probe_stripe()
+    stats = get_global_stats()
+    return {
+        "nhid": {
+            "status": "up" if nhid_status == "reachable" else "down",
+            "url": _NHID_BASE_URL,
+        },
+        "saas": {
+            "status": "up",
+            "orgs": stats.get("total_orgs", 0),
+            "requests_today": stats.get("orgs_active_today", 0),
+            "total_requests": stats.get("total_requests", 0),
+        },
+        "stripe": {
+            "status": stripe_status,
+        },
+    }
 
 
 # ── Admin: org management ─────────────────────────────────────────────────────

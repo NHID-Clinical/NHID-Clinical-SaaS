@@ -36,6 +36,7 @@ function Router() {
         <Layout>
           <Switch>
             <Route path="/" component={Onboarding} />
+            <Route path="/onboarding" component={Onboarding} />
             <Route path="/dashboard"><ProtectedRoute component={Dashboard} /></Route>
             <Route path="/usage"><ProtectedRoute component={Usage} /></Route>
             <Route path="/trace"><ProtectedRoute component={Trace} /></Route>
