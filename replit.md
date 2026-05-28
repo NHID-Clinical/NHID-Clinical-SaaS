@@ -1,45 +1,52 @@
-# [Project name]
+# NHID Audit Core
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A tamper-evident audit logging engine for AI/agent-driven healthcare workflows. Proves what an agent did, when it did it, and whether it was authorized at that moment.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `cd artifacts/nhid-audit-core && uvicorn main:app --host 0.0.0.0 --port 8000 --reload` — run the audit core (workflow: "NHID Audit Core")
+- FastAPI interactive docs available at the service URL + `/docs`
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.11
+- FastAPI + Uvicorn
+- SQLite (single file: `nhid_audit.db`, created automatically on startup)
+- hashlib SHA256 for tamper-evident hash chaining
+- Pydantic v2 for request/response validation
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/nhid-audit-core/main.py` — entire service (single file, by design)
+- `artifacts/nhid-audit-core/nhid_audit.db` — SQLite database (auto-created on first run)
+- `artifacts/nhid-audit-core/requirements.txt` — Python dependencies
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- **Single-file service**: All logic lives in `main.py` per the spec's "single service" requirement — no module splitting.
+- **Hash chaining rule**: `SHA256(prev_hash + json.dumps(event, sort_keys=True) + timestamp + agent_id)` — deterministic and tamper-detectable.
+- **Genesis hash**: Sessions start with a 64-zero string as `prev_hash` for the first event, making chain validation unambiguous.
+- **Token scope**: Scopes are stored as JSON arrays on both agents and tokens; `auth/verify` checks the requested scope is present in the token's scope array.
+- **No external services**: SQLite only — no Postgres, Redis, or Docker needed.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Four endpoints that together prove agent accountability:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /agent/issue` | Create an agent identity and access token |
+| `POST /auth/verify` | Validate a token is active and covers a requested scope |
+| `POST /trace/append` | Append a hash-chained event to a session trace |
+| `GET /proof/{session_id}` | Export the full ordered audit trail with chain validity flag |
+
+If any stored trace record is tampered with after the fact, `valid_chain` in the proof response returns `false`.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+_Populate as you build._
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- `nhid_audit.db` is written relative to the working directory (`artifacts/nhid-audit-core/`). Always run uvicorn from that directory.
+- The service runs on port 8000 (not routed through the shared pnpm proxy — access directly).

@@ -1,0 +1,152 @@
+Build a production-style but minimal backend system called:
+NHID Audit Core
+PURPOSE
+This system provides tamper-evident audit logging for AI/agent-driven healthcare workflows.
+It must allow a user to:
+Issue an agent identity
+Verify authorization at request time
+Log a sequence of agent events
+Export a cryptographically verifiable audit proof
+This is NOT a platform. It is NOT a SaaS ecosystem. It is a single-purpose audit integrity engine.
+TECH STACK
+Python 3.11
+FastAPI
+SQLite (only database)
+Uvicorn
+hashlib (SHA256)
+JSON only storage
+single service (main.py preferred)
+No external services:
+no Postgres
+no Redis
+no Docker requirement
+no frontend requirement
+CORE DESIGN PRINCIPLE
+Everything revolves around one concept:
+“Can we prove what an AI/agent did, when it did it, and whether it was authorized at that moment?”
+DATA MODELS (SQLite)
+Create these tables:
+agents
+agent_id TEXT PRIMARY KEY
+provider_id TEXT (optional)
+scope TEXT (JSON string)
+created_at TEXT
+tokens
+token_id TEXT PRIMARY KEY
+agent_id TEXT
+scope TEXT (JSON string)
+expires_at TEXT
+issued_at TEXT
+traces
+trace_id TEXT PRIMARY KEY
+session_id TEXT
+agent_id TEXT
+event TEXT (JSON string)
+prev_hash TEXT
+curr_hash TEXT
+timestamp TEXT
+HASHING RULE (CRITICAL)
+Use SHA256 with deterministic input:
+
+prev_hash + json.dumps(event, sort_keys=True) + timestamp + agent_id
+This ensures tamper detection.
+REQUIRED ENDPOINTS
+1. POST /agent/issue
+Creates an agent identity + token.
+INPUT:
+JSON
+{
+  "scope": ["prior_auth", "eligibility"]
+}
+OUTPUT:
+agent_id
+token_id
+expires_at
+2. POST /auth/verify
+Validates authorization.
+INPUT:
+JSON
+{
+  "agent_id": "...",
+  "token_id": "...",
+  "scope": "prior_auth"
+}
+LOGIC:
+token exists
+token not expired
+scope allowed for agent
+OUTPUT:
+JSON
+{
+  "authorized": true,
+  "reason": "optional if false"
+}
+3. POST /trace/append
+Appends an event to a session trace.
+INPUT:
+JSON
+{
+  "session_id": "...",
+  "agent_id": "...",
+  "event": { "any": "json" }
+}
+LOGIC:
+retrieve last hash for session
+compute new hash using hashing rule
+store trace record
+OUTPUT:
+trace_id
+prev_hash
+curr_hash
+4. GET /proof/{session_id}
+Returns full audit trail.
+MUST:
+return ordered event list
+verify hash chain integrity
+return validity boolean
+OUTPUT:
+JSON
+{
+  "session_id": "...",
+  "valid_chain": true,
+  "events": [
+    {
+      "event": {},
+      "timestamp": "...",
+      "hash": "..."
+    }
+  ]
+}
+STARTUP BEHAVIOR
+auto-create SQLite tables on startup
+run with: uvicorn main:app --reload
+expose FastAPI docs at /docs
+ACCEPTANCE CRITERIA (VERY IMPORTANT)
+System is considered correct ONLY if:
+You can issue an agent
+You can verify authorization
+You can append multiple trace events in sequence
+You can retrieve a full proof object
+If any stored trace is modified manually, hash verification fails
+WHAT NOT TO BUILD
+Do NOT include:
+dashboards
+frontend UI
+billing systems
+certification tiers
+governance layers
+registries
+blockchain terminology
+distributed systems
+microservices
+OUTPUT GOAL
+A working API that demonstrates:
+agent → authorization → event logging → tamper-evident proof export
+This is the minimal viable “audit integrity engine” for AI/agent healthcare workflows.
+SUCCESS DEFINITION
+If a user can:
+issue an agent
+simulate a 5–10 step interaction
+retrieve a proof object
+show it is tamper-evident
+then the system is complete.
