@@ -146,10 +146,10 @@ export default function Dashboard() {
             letterSpacing: "-0.02em", marginBottom: 4,
           }}
         >
-          Control Plane
+          Dashboard
         </h1>
         <p style={{ fontSize: 13, color: "var(--nhid-muted)" }}>
-          Operations overview for {profile.org_name}
+          Overview for <strong style={{ color: "var(--nhid-text)", fontWeight: 700 }}>{profile.org_name}</strong>
         </p>
       </div>
 

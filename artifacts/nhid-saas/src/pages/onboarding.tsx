@@ -154,6 +154,103 @@ function ApiKeyReveal({ apiKey, orgName, onContinue }: { apiKey: string; orgName
   );
 }
 
+function SignInPanel({ onSuccess }: { onSuccess: () => void }) {
+  const [key, setKey] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const { toast } = useToast();
+
+  const handleSignIn = async () => {
+    const trimmed = key.trim();
+    if (!trimmed) return;
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/saas-api/saas/orgs/me", {
+        headers: { "X-API-Key": trimmed },
+      });
+      if (!res.ok) {
+        setError("API key not recognised. Please check and try again.");
+        setLoading(false);
+        return;
+      }
+      const data = await res.json();
+      localStorage.setItem("nhid_api_key", trimmed);
+      localStorage.setItem("nhid_org", JSON.stringify({
+        org_id: data.org_id,
+        org_name: data.org_name,
+        plan: data.plan,
+      }));
+      window.dispatchEvent(new Event("storage"));
+      toast({ title: "Signed in", description: `Welcome back, ${data.org_name}` });
+      onSuccess();
+    } catch {
+      setError("Could not connect. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.02)",
+        border: "1px solid var(--nhid-border)",
+        borderRadius: 14, padding: "22px 26px",
+        backdropFilter: "blur(12px)",
+        animation: "fadeSlideUp 0.25s ease",
+      }}
+    >
+      <div style={{ fontSize: 14, fontWeight: 700, color: "var(--nhid-text)", marginBottom: 4 }}>
+        Sign in with your API key
+      </div>
+      <div style={{ fontSize: 11, color: "var(--nhid-muted)", marginBottom: 16, lineHeight: 1.6 }}>
+        Paste the key you received when you created your workspace.
+      </div>
+
+      <input
+        value={key}
+        onChange={e => { setKey(e.target.value); setError(""); }}
+        onKeyDown={e => e.key === "Enter" && handleSignIn()}
+        placeholder="nhid_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        autoFocus
+        style={{
+          width: "100%", padding: "11px 14px", borderRadius: 9,
+          background: "rgba(255,255,255,0.05)",
+          border: `1px solid ${error ? "rgba(239,68,68,0.5)" : "var(--nhid-border)"}`,
+          color: "var(--nhid-text)", fontSize: 12, outline: "none",
+          fontFamily: "monospace", marginBottom: error ? 8 : 14,
+          transition: "border-color 0.2s",
+        }}
+        onFocus={e => !error && (e.target.style.borderColor = "rgba(0,194,168,0.4)")}
+        onBlur={e => !error && (e.target.style.borderColor = "var(--nhid-border)")}
+      />
+
+      {error && (
+        <div style={{ fontSize: 11, color: "#f87171", marginBottom: 14 }}>{error}</div>
+      )}
+
+      <button
+        onClick={handleSignIn}
+        disabled={loading || !key.trim()}
+        style={{
+          width: "100%", padding: "11px", borderRadius: 9,
+          background: key.trim() ? "linear-gradient(135deg, #00c2a8, #53d8fb)" : "rgba(255,255,255,0.06)",
+          border: "none",
+          color: key.trim() ? "#070c17" : "var(--nhid-muted)",
+          fontSize: 13, fontWeight: 800, cursor: loading || !key.trim() ? "not-allowed" : "pointer",
+          fontFamily: "'Raleway', sans-serif",
+          boxShadow: key.trim() ? "0 0 24px rgba(0,194,168,0.3)" : "none",
+          transition: "all 0.2s", opacity: loading ? 0.75 : 1,
+        }}
+      >
+        {loading ? "Verifying…" : "Sign In →"}
+      </button>
+      <style>{`@keyframes fadeSlideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }`}</style>
+    </div>
+  );
+}
+
 export default function Onboarding() {
   const [, setLocation] = useLocation();
   const apiKey = useApiKey();
@@ -161,6 +258,7 @@ export default function Onboarding() {
   const { toast } = useToast();
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [createdOrg, setCreatedOrg] = useState<string>("");
+  const [showSignIn, setShowSignIn] = useState(false);
 
   useEffect(() => {
     if (apiKey && !createdKey) setLocation("/dashboard");
@@ -335,7 +433,47 @@ export default function Onboarding() {
           )}
         </div>
 
-        <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: "var(--nhid-muted)", opacity: 0.6 }}>
+        {/* Sign-in toggle */}
+        {!createdKey && (
+          <div style={{ marginTop: 18 }}>
+            {!showSignIn ? (
+              <div style={{ textAlign: "center" }}>
+                <button
+                  onClick={() => setShowSignIn(true)}
+                  style={{
+                    background: "none", border: "none", cursor: "pointer",
+                    fontSize: 12, color: "var(--nhid-muted)", fontFamily: "'Raleway', sans-serif",
+                    textDecoration: "underline", textDecorationStyle: "dotted",
+                    textUnderlineOffset: 3, padding: "4px 0",
+                    transition: "color 0.15s",
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.color = "var(--nhid-teal)")}
+                  onMouseLeave={e => (e.currentTarget.style.color = "var(--nhid-muted)")}
+                >
+                  Already have an API key? Sign in →
+                </button>
+              </div>
+            ) : (
+              <>
+                <div style={{ textAlign: "center", marginBottom: 14 }}>
+                  <button
+                    onClick={() => setShowSignIn(false)}
+                    style={{
+                      background: "none", border: "none", cursor: "pointer",
+                      fontSize: 12, color: "var(--nhid-muted)", fontFamily: "'Raleway', sans-serif",
+                      padding: "4px 0",
+                    }}
+                  >
+                    ← Back to sign up
+                  </button>
+                </div>
+                <SignInPanel onSuccess={() => setLocation("/dashboard")} />
+              </>
+            )}
+          </div>
+        )}
+
+        <div style={{ textAlign: "center", marginTop: 20, fontSize: 11, color: "var(--nhid-muted)", opacity: 0.6 }}>
           NHID Clinical · HIPAA-aligned audit infrastructure · v2.0
         </div>
       </div>

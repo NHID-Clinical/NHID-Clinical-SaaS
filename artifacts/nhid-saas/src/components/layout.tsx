@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import {
-  LayoutDashboard, Activity, Shield, Search, BarChart2,
-  Settings2, X, Menu, LogIn, ChevronRight
+  LayoutDashboard, Shield, Search, BarChart2,
+  X, Menu, LogIn, ChevronRight, LogOut, Activity,
 } from "lucide-react";
 import { useApiKey } from "@/hooks/use-nhid";
 
@@ -27,29 +27,77 @@ const NHIDLogoMark = ({ size = 32 }: { size?: number }) => (
 );
 
 const NAV_ITEMS = [
-  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Audit Trail", href: "/trace", icon: Shield },
-  { name: "Verification", href: "/proof", icon: Search },
-  { name: "Usage", href: "/usage", icon: BarChart2 },
+  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, desc: "Overview & metrics" },
+  { name: "Audit Trail", href: "/trace", icon: Shield, desc: "Log an event" },
+  { name: "Verification", href: "/proof", icon: Search, desc: "Verify a session" },
+  { name: "Usage", href: "/usage", icon: BarChart2, desc: "API usage stats" },
 ];
 
-const STATUS_ITEMS = [
-  { label: "NHID Core", color: "#00c2a8" },
-  { label: "SaaS Layer", color: "#00c2a8" },
-  { label: "Stripe", color: "#00c2a8" },
-];
-
-function StatusDot({ color }: { color: string }) {
+function StatusDot({ status }: { status: "up" | "down" | "unknown" }) {
+  const color = status === "up" ? "#00c2a8" : status === "down" ? "#ef4444" : "#94a3b8";
   return (
     <span
       style={{
         width: 6, height: 6, borderRadius: "50%",
         background: color, display: "inline-block",
-        boxShadow: `0 0 6px ${color}`,
+        boxShadow: status === "up" ? `0 0 6px ${color}` : "none",
         flexShrink: 0,
+        transition: "background 0.3s",
       }}
     />
   );
+}
+
+function useHealthStatus() {
+  const [status, setStatus] = useState<{
+    nhid: "up" | "down" | "unknown";
+    saas: "up" | "down" | "unknown";
+    stripe: "up" | "down" | "unknown";
+  }>({ nhid: "unknown", saas: "unknown", stripe: "unknown" });
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch("/saas-api/health");
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        setStatus({
+          nhid: data.nhid_core === "in-process" ? "up" : "down",
+          saas: data.status === "ok" ? "up" : "down",
+          stripe: data.stripe !== "missing" ? "up" : "down",
+        });
+      } catch {
+        setStatus({ nhid: "down", saas: "down", stripe: "unknown" });
+      }
+    };
+    check();
+    const interval = setInterval(check, 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return status;
+}
+
+function useOrgName() {
+  const [orgName, setOrgName] = useState<string>("");
+  useEffect(() => {
+    const read = () => {
+      try {
+        const stored = localStorage.getItem("nhid_org");
+        if (stored) setOrgName(JSON.parse(stored).org_name ?? "");
+      } catch { setOrgName(""); }
+    };
+    read();
+    window.addEventListener("storage", read);
+    return () => window.removeEventListener("storage", read);
+  }, []);
+  return orgName;
+}
+
+function signOut() {
+  localStorage.removeItem("nhid_api_key");
+  localStorage.removeItem("nhid_org");
+  window.dispatchEvent(new Event("storage"));
 }
 
 function SidebarContent({
@@ -61,6 +109,15 @@ function SidebarContent({
   apiKey: string | null;
   onClose?: () => void;
 }) {
+  const health = useHealthStatus();
+  const orgName = useOrgName();
+
+  const STATUS_ITEMS = [
+    { label: "NHID Core", status: health.nhid },
+    { label: "SaaS Layer", status: health.saas },
+    { label: "Stripe", status: health.stripe },
+  ] as const;
+
   return (
     <div
       style={{
@@ -93,7 +150,7 @@ function SidebarContent({
                 letterSpacing: "0.14em", textTransform: "uppercase",
               }}
             >
-              Control Plane
+              Audit Platform
             </div>
           </div>
         </div>
@@ -123,16 +180,16 @@ function SidebarContent({
             <div style={{ fontSize: 10, color: "var(--nhid-muted)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600 }}>
               Workspace
             </div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--nhid-text)" }}>
-              Active Session
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--nhid-text)", marginBottom: 3 }}>
+              {orgName || "Loading…"}
             </div>
             <div
               style={{
                 fontSize: 9, fontFamily: "monospace", color: "var(--nhid-teal)",
-                marginTop: 4, opacity: 0.8,
+                opacity: 0.8,
               }}
             >
-              {`…${apiKey.slice(-8)}`}
+              {`Key: •••${apiKey.slice(-6)}`}
             </div>
           </div>
         </div>
@@ -148,7 +205,7 @@ function SidebarContent({
               key={item.name}
               href={item.href}
               onClick={onClose}
-              data-testid={`nav-${item.name.toLowerCase()}`}
+              data-testid={`nav-${item.name.toLowerCase().replace(" ", "-")}`}
               style={{
                 display: "flex", alignItems: "center", gap: 10,
                 padding: "9px 12px", borderRadius: 9, marginBottom: 2,
@@ -165,20 +222,28 @@ function SidebarContent({
                 size={15}
                 style={{ flexShrink: 0, opacity: isActive ? 1 : 0.7 }}
               />
-              <span
-                style={{
-                  fontSize: 13, fontWeight: isActive ? 700 : 500,
-                  letterSpacing: "0.01em", flex: 1,
-                }}
-              >
-                {item.name}
-              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 13, fontWeight: isActive ? 700 : 500,
+                    letterSpacing: "0.01em",
+                  }}
+                >
+                  {item.name}
+                </div>
+                {!isActive && (
+                  <div style={{ fontSize: 9, color: "var(--nhid-muted)", opacity: 0.6, marginTop: 1 }}>
+                    {item.desc}
+                  </div>
+                )}
+              </div>
               {isActive && (
                 <span
                   style={{
                     width: 5, height: 5, borderRadius: "50%",
                     background: "var(--nhid-teal)",
                     boxShadow: "0 0 6px var(--nhid-teal)",
+                    flexShrink: 0,
                   }}
                 />
               )}
@@ -204,13 +269,46 @@ function SidebarContent({
             }}
           >
             <LogIn size={14} style={{ flexShrink: 0, opacity: 0.7 }} />
-            <span style={{ fontSize: 13, fontWeight: 500 }}>Admin</span>
-            <ChevronRight size={11} style={{ marginLeft: "auto", opacity: 0.4 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>Admin</div>
+              <div style={{ fontSize: 9, color: "var(--nhid-muted)", opacity: 0.6, marginTop: 1 }}>Operations console</div>
+            </div>
+            <ChevronRight size={11} style={{ opacity: 0.4 }} />
           </Link>
+
+          {/* Sign out */}
+          <button
+            onClick={() => { signOut(); onClose?.(); }}
+            data-testid="btn-signout"
+            style={{
+              width: "100%", display: "flex", alignItems: "center", gap: 10,
+              padding: "9px 12px", borderRadius: 9, marginTop: 2,
+              background: "none", border: "1px solid transparent",
+              color: "var(--nhid-muted)", cursor: "pointer",
+              textAlign: "left", fontFamily: "'Raleway', sans-serif",
+              transition: "all 0.15s ease",
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.07)";
+              (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(239,68,68,0.2)";
+              (e.currentTarget as HTMLButtonElement).style.color = "#f87171";
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLButtonElement).style.background = "none";
+              (e.currentTarget as HTMLButtonElement).style.borderColor = "transparent";
+              (e.currentTarget as HTMLButtonElement).style.color = "var(--nhid-muted)";
+            }}
+          >
+            <LogOut size={14} style={{ flexShrink: 0, opacity: 0.7 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>Sign Out</div>
+              <div style={{ fontSize: 9, opacity: 0.6, marginTop: 1 }}>Clear session</div>
+            </div>
+          </button>
         </div>
       </nav>
 
-      {/* System status */}
+      {/* System status — now dynamic */}
       <div
         style={{
           padding: "14px 16px",
@@ -237,12 +335,14 @@ function SidebarContent({
             <span
               style={{
                 display: "flex", alignItems: "center", gap: 5,
-                fontSize: 10, color: s.color, fontWeight: 700,
+                fontSize: 10,
+                color: s.status === "up" ? "#00c2a8" : s.status === "down" ? "#ef4444" : "#94a3b8",
+                fontWeight: 700,
                 letterSpacing: "0.06em",
               }}
             >
-              <StatusDot color={s.color} />
-              UP
+              <StatusDot status={s.status} />
+              {s.status === "up" ? "UP" : s.status === "down" ? "DOWN" : "—"}
             </span>
           </div>
         ))}
@@ -347,22 +447,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 fontSize: 11, color: "var(--nhid-muted)",
               }}
             >
-              <StatusDot color="#00c2a8" />
+              <Activity size={11} style={{ color: "#00c2a8" }} />
               <span style={{ fontFamily: "monospace", fontSize: 10 }}>
                 {apiKey ? `•••${apiKey.slice(-4)}` : "—"}
               </span>
             </div>
-            <div
+
+            {/* Sign out on mobile top bar */}
+            <button
+              onClick={signOut}
+              title="Sign out"
+              className="md:hidden"
               style={{
-                width: 30, height: 30, borderRadius: "50%",
-                background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 12, fontWeight: 900, color: "#070c17",
-                flexShrink: 0,
+                background: "none", border: "none", cursor: "pointer",
+                color: "var(--nhid-muted)", padding: 4,
               }}
             >
-              {String.fromCharCode(65 + Math.floor(Math.random() * 0))}N
-            </div>
+              <LogOut size={15} />
+            </button>
           </div>
         </header>
 
