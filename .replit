@@ -28,6 +28,10 @@ args = "NHID Clinical Bridge"
 task = "workflow.run"
 args = "NHID Clinical Viewer"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "NHID Clinical App"
+
 [[workflows.workflow]]
 name = "NHID Audit Core"
 author = "agent"
@@ -64,6 +68,18 @@ waitForPort = 5174
 [workflows.workflow.metadata]
 outputType = "webview"
 
+[[workflows.workflow]]
+name = "NHID Clinical App"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash nhid-clinical/replit_start_clinical.sh"
+waitForPort = 8002
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
@@ -86,6 +102,10 @@ externalPort = 80
 [[ports]]
 localPort = 8001
 externalPort = 3000
+
+[[ports]]
+localPort = 8002
+externalPort = 4200
 
 [[ports]]
 localPort = 8080
