@@ -57,21 +57,36 @@ def get_usage_summary(org_id: str) -> Dict[str, Any]:
     }
 
 
-def get_recent_activity(org_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+def get_recent_activity(org_id: Optional[str], limit: int = 20) -> List[Dict[str, Any]]:
+    """Return recent usage_log rows. Pass org_id=None to get activity across all orgs."""
     conn = _get_conn()
-    rows = conn.execute(
-        "SELECT * FROM usage_log WHERE org_id = ? ORDER BY id DESC LIMIT ?",
-        (org_id, limit),
-    ).fetchall()
+    if org_id is None:
+        rows = conn.execute(
+            "SELECT * FROM usage_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM usage_log WHERE org_id = ? ORDER BY id DESC LIMIT ?",
+            (org_id, limit),
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
 def get_global_stats() -> Dict[str, Any]:
     conn = _get_conn()
-    total = conn.execute("SELECT COUNT(*) FROM usage_log").fetchone()[0]
-    orgs_active = conn.execute(
+    total_requests = conn.execute("SELECT COUNT(*) FROM usage_log").fetchone()[0]
+    orgs_active_today = conn.execute(
         "SELECT COUNT(DISTINCT org_id) FROM usage_log WHERE timestamp >= date('now')"
     ).fetchone()[0]
+    total_orgs = conn.execute("SELECT COUNT(*) FROM orgs WHERE active = 1").fetchone()[0]
+    plan_rows = conn.execute(
+        "SELECT plan, COUNT(*) as cnt FROM orgs WHERE active = 1 GROUP BY plan"
+    ).fetchall()
     conn.close()
-    return {"total_requests_all_orgs": total, "orgs_active_today": orgs_active}
+    return {
+        "total_requests": total_requests,
+        "total_orgs": total_orgs,
+        "orgs_active_today": orgs_active_today,
+        "orgs_by_plan": {r["plan"]: r["cnt"] for r in plan_rows},
+    }

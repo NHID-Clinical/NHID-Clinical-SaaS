@@ -10,6 +10,7 @@ import Dashboard from "@/pages/dashboard";
 import Usage from "@/pages/usage";
 import Trace from "@/pages/trace";
 import Proof from "@/pages/proof";
+import AdminPage from "@/pages/admin";
 import { useApiKey } from "@/hooks/use-nhid";
 
 const queryClient = new QueryClient();
@@ -26,16 +27,24 @@ function ProtectedRoute({ component: Component, ...rest }: any) {
 
 function Router() {
   return (
-    <Layout>
-      <Switch>
-        <Route path="/" component={Onboarding} />
-        <Route path="/dashboard"><ProtectedRoute component={Dashboard} /></Route>
-        <Route path="/usage"><ProtectedRoute component={Usage} /></Route>
-        <Route path="/trace"><ProtectedRoute component={Trace} /></Route>
-        <Route path="/proof"><ProtectedRoute component={Proof} /></Route>
-        <Route component={NotFound} />
-      </Switch>
-    </Layout>
+    <Switch>
+      {/* Admin portal — standalone, no shared layout, not in nav */}
+      <Route path="/admin" component={AdminPage} />
+
+      {/* Standard app routes */}
+      <Route>
+        <Layout>
+          <Switch>
+            <Route path="/" component={Onboarding} />
+            <Route path="/dashboard"><ProtectedRoute component={Dashboard} /></Route>
+            <Route path="/usage"><ProtectedRoute component={Usage} /></Route>
+            <Route path="/trace"><ProtectedRoute component={Trace} /></Route>
+            <Route path="/proof"><ProtectedRoute component={Proof} /></Route>
+            <Route component={NotFound} />
+          </Switch>
+        </Layout>
+      </Route>
+    </Switch>
   );
 }
 

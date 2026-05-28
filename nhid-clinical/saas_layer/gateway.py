@@ -5,6 +5,8 @@ Core files (app.py, nhid_engine, nhid_policy, nhid_event_store) are NOT modified
 """
 import os
 import sys
+import uuid
+import time
 
 # Ensure nhid-clinical/ is on the path so core modules are importable
 _CLINICAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +44,14 @@ from nhid_policy import NHIDPolicyEngine
 
 _ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
 
+# ── Admin portal credentials (internal use only) ──────────────────────────────
+_ADMIN_USER = "admin"
+_ADMIN_PASS = "nhid-admin-2026"
+_ADMIN_SESSION_TTL = 8 * 3600  # 8 hours
+
+# In-memory session store: token → expiry_timestamp
+_admin_sessions: Dict[str, float] = {}
+
 policy = NHIDPolicyEngine()
 
 app = FastAPI(
@@ -75,6 +85,17 @@ def get_current_org(x_api_key: Optional[str] = Header(default=None)) -> Dict[str
 def require_admin(x_admin_key: Optional[str] = Header(default=None)) -> None:
     if x_admin_key != _ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Admin key required")
+
+
+def require_admin_session(x_admin_session: Optional[str] = Header(default=None)) -> str:
+    """Validate an admin session token issued by POST /admin/login."""
+    if not x_admin_session:
+        raise HTTPException(status_code=401, detail="Admin session token required (X-Admin-Session header)")
+    expiry = _admin_sessions.get(x_admin_session)
+    if expiry is None or time.time() > expiry:
+        _admin_sessions.pop(x_admin_session, None)
+        raise HTTPException(status_code=401, detail="Admin session expired or invalid. Please log in again.")
+    return x_admin_session
 
 
 def subscription_gated_org(org: Dict = Depends(get_current_org)) -> Dict[str, Any]:
@@ -303,3 +324,75 @@ async def saas_replay(session_id: str, org: Dict = Depends(subscription_gated_or
     events = get_events(session_id)
     log_request(org["org_id"], f"/saas/replay/{session_id}", "GET", 200, session_id)
     return {"session_id": session_id, "events": events, "event_count": len(events)}
+
+
+# ── Admin portal: session auth ────────────────────────────────────────────────
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/admin/login")
+async def admin_login(body: AdminLoginRequest):
+    """
+    Issue an admin session token.
+    Credentials: ADMIN_USER / ADMIN_PASS (hardcoded, internal only).
+    """
+    if body.username != _ADMIN_USER or body.password != _ADMIN_PASS:
+        raise HTTPException(status_code=401, detail="Invalid admin credentials")
+    token = str(uuid.uuid4())
+    _admin_sessions[token] = time.time() + _ADMIN_SESSION_TTL
+    # Purge expired sessions to keep memory tidy
+    expired = [k for k, exp in _admin_sessions.items() if time.time() > exp]
+    for k in expired:
+        del _admin_sessions[k]
+    return {"admin_session_token": token, "expires_in": _ADMIN_SESSION_TTL}
+
+
+# ── Admin portal: protected endpoints ────────────────────────────────────────
+
+@app.get("/admin/orgs")
+async def admin_portal_orgs(_token: str = Depends(require_admin_session)):
+    """List all orgs enriched with per-org usage totals."""
+    orgs = list_orgs()
+    enriched = []
+    for org in orgs:
+        usage = get_usage_summary(org["org_id"])
+        enriched.append({
+            **org,
+            "today_requests": usage.get("today_requests", 0),
+            "total_requests": usage.get("total_requests", 0),
+        })
+    return {
+        "orgs": enriched,
+        "global_stats": get_global_stats(),
+    }
+
+
+@app.get("/admin/usage")
+async def admin_portal_usage(_token: str = Depends(require_admin_session)):
+    """Global usage stats and recent activity across all orgs."""
+    stats = get_global_stats()
+    # Collect recent activity across all orgs (last 50 events)
+    activity = get_recent_activity(org_id=None, limit=50)
+    return {
+        "global_stats": stats,
+        "recent_activity": activity,
+    }
+
+
+@app.get("/admin/org/{org_id}")
+async def admin_portal_org(org_id: str, _token: str = Depends(require_admin_session)):
+    """Single org detail with full usage breakdown and recent activity."""
+    org = get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail=f"Org '{org_id}' not found")
+    usage = get_usage_summary(org_id)
+    rate = check_rate_limit(org_id, org["plan"], usage["today_requests"])
+    activity = get_recent_activity(org_id=org_id, limit=20)
+    return {
+        **org,
+        "usage": {**usage, "rate_limit": rate},
+        "recent_activity": activity,
+    }
