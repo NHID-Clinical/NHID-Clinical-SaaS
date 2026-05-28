@@ -9,6 +9,7 @@ router = "path"
 name = "react-vite"
 version = "1.0.0"
 
+# ── React frontend ─────────────────────────────────────────────────────────────
 [[services]]
 name = "web"
 paths = [ "/nhid-saas/" ]
@@ -29,3 +30,25 @@ to = "/index.html"
 [services.env]
 PORT = "23223"
 BASE_PATH = "/nhid-saas/"
+
+# ── SaaS Gateway (Python / FastAPI) ───────────────────────────────────────────
+# Port 8010 is managed by the "NHID Clinical SaaS" workflow in development.
+# This service entry exists purely to register /saas/, /saas-api/, /admin/,
+# and /health paths in the Replit reverse proxy so they route to port 8010.
+# In production, the run block starts the gateway directly.
+[[services]]
+name = "SaaS Gateway"
+paths = [ "/saas/", "/saas-api/", "/admin/", "/health" ]
+localPort = 8010
+
+[services.development]
+run = "sleep infinity"
+
+[services.production.run]
+args = [ "python", "nhid-clinical/saas_main.py" ]
+
+[services.production.run.env]
+PORT = "8010"
+
+[services.production.health.startup]
+path = "/health"

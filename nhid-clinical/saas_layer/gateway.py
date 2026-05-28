@@ -73,6 +73,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def _strip_path_prefix(request: Request, call_next):
+    """
+    Strip /saas-api prefix when present.
+
+    The Vite dev proxy already rewrites /saas-api/* → /* before hitting port 8010,
+    so in development this middleware is a no-op.
+
+    In production the Replit reverse-proxy routes /saas-api/* to this service
+    WITHOUT rewriting the path, so we strip it here before FastAPI routing runs.
+    This lets the same route definitions serve both:
+      - Direct access:  /saas/billing/webhook  (Stripe webhook calls)
+      - Prefixed access: /saas-api/saas/...    (React frontend in production)
+    """
+    path = request.scope.get("path", "")
+    if path.startswith("/saas-api"):
+        new_path = path[len("/saas-api"):] or "/"
+        request.scope["path"] = new_path
+        request.scope["raw_path"] = new_path.encode("latin-1")
+    return await call_next(request)
+
+
 init_db()
 migrate_billing_columns()
 
@@ -254,6 +277,28 @@ async def billing_checkout(body: CheckoutRequest, org: Dict = Depends(get_curren
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Stripe error: {exc}")
     return {"checkout_url": url, "plan": body.plan}
+
+
+@app.get("/saas/billing/webhook/status")
+async def billing_webhook_status():
+    """
+    Diagnostic: confirm webhook endpoint config without triggering a real event.
+    Safe to call at any time — no DB writes, no Stripe API calls.
+    """
+    secret_set = bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))
+    return {
+        "webhook_url_path": "/saas/billing/webhook",
+        "signature_verification": "enabled" if secret_set else "disabled — set STRIPE_WEBHOOK_SECRET",
+        "secret_configured": secret_set,
+        "handled_events": [
+            "checkout.session.completed",
+            "invoice.paid",
+            "customer.subscription.deleted",
+            "customer.subscription.updated",
+        ],
+        "idempotency": "enabled (processed_events table)",
+        "note": "Configure this path as your Stripe webhook endpoint in the Stripe dashboard.",
+    }
 
 
 @app.post("/saas/billing/webhook")
