@@ -1,15 +1,24 @@
 """
-NHID-Clinical SaaS Gateway.
-Wraps the NHID core engine with multi-tenant auth, usage tracking, and Stripe billing.
-Core files (app.py, nhid_engine, nhid_policy, nhid_event_store) are NOT modified.
+NHID-Clinical SaaS Gateway — single-service production architecture.
+
+This is the ONLY backend service that runs in production.
+
+NHID core (nhid_event_store, nhid_policy, nhid_engine) is accessed via
+direct Python imports inside nhid_client — no Bridge HTTP service required.
+
+Production execution graph:
+  Frontend (/nhid-saas/) → SaaS Gateway (port 8010) → nhid_client (in-process)
+                                                      → Stripe (HTTPS)
+                                                      → saas.db (SQLite)
+
+Core files (app.py, nhid_engine, nhid_policy, nhid_event_store, tests/) are
+never modified by this layer.
 """
 import logging
 import os
 import sys
 import uuid
 import time
-import urllib.request
-import urllib.error
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,14 +54,10 @@ from saas_layer.stripe_billing import (
 )
 from saas_layer.stripe_client import get_publishable_key
 
-# All NHID access goes through HTTP (nhid_client → Bridge port 8001).
-# No direct nhid_event_store / nhid_policy imports in the SaaS layer.
+# NHID core is accessed via direct Python import (no Bridge HTTP dependency).
 from saas_layer import nhid_client
 
 _ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
-
-# ── NHID core base URL (SaaS pings core via HTTP for health checks) ───────────
-_NHID_BASE_URL = os.environ.get("NHID_BASE_URL", "http://localhost:8000")
 
 # ── Admin credentials — deterministic, no env-var dependency ─────────────────
 # These are intentionally hardcoded so the portal is always accessible.
@@ -141,18 +146,11 @@ def subscription_gated_org(org: Dict = Depends(get_current_org)) -> Dict[str, An
 
 def _probe_nhid() -> str:
     """
-    HTTP reachability probe for NHID core.
-    Any response (including 404/405) means the server is up.
-    Only a connection-level failure means unreachable.
+    Import-based reachability check for NHID core.
+    Returns 'reachable' if nhid_event_store can be imported in-process.
+    No HTTP call — works in production with no Bridge service running.
     """
-    try:
-        urllib.request.urlopen(f"{_NHID_BASE_URL}/", timeout=2)
-        return "reachable"
-    except urllib.error.HTTPError:
-        # Got an HTTP response — server is up even if endpoint is unknown
-        return "reachable"
-    except Exception:
-        return "unreachable"
+    return "reachable" if nhid_client.is_reachable() else "unreachable"
 
 
 def _probe_stripe() -> str:
