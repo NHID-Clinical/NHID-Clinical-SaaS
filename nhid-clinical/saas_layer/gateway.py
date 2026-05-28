@@ -33,7 +33,7 @@ if _CLINICAL_DIR not in sys.path:
 
 from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 from typing import Optional, Any, Dict
 
@@ -179,6 +179,16 @@ def _is_production() -> bool:
         os.environ.get("APP_ENV", "").lower() == "production"
         or os.environ.get("REPLIT_DEPLOYMENT") == "1"
     )
+
+
+# ── Root redirect ─────────────────────────────────────────────────────────────
+# "/" is owned by this gateway in production so that the NHID Audit Core
+# Dashboard is never the first thing a visitor sees. Redirect cleanly to the
+# SaaS product UI.
+
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    return RedirectResponse(url="/nhid-saas/", status_code=301)
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────

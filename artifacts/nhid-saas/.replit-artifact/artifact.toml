@@ -33,12 +33,12 @@ BASE_PATH = "/nhid-saas/"
 
 # ── SaaS Gateway (Python / FastAPI) ───────────────────────────────────────────
 # Port 8010 is managed by the "NHID Clinical SaaS" workflow in development.
-# This service entry exists purely to register /saas/, /saas-api/, /admin/,
-# and /health paths in the Replit reverse proxy so they route to port 8010.
 # In production, the run block starts the gateway directly.
+# "/" is owned here so the root redirects to /nhid-saas/ — NHID Audit Core
+# Dashboard is NOT exposed at the root in production.
 [[services]]
 name = "SaaS Gateway"
-paths = [ "/saas/", "/saas-api/", "/admin/", "/health" ]
+paths = [ "/", "/saas/", "/saas-api/", "/admin/", "/health" ]
 localPort = 8010
 
 [services.development]

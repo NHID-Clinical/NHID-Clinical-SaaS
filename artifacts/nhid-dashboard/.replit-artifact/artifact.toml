@@ -1,5 +1,5 @@
 kind = "web"
-previewPath = "/"
+previewPath = "/nhid-audit/"
 title = "NHID Audit Core Dashboard"
 version = "1.0.0"
 id = "artifacts/nhid-dashboard"
@@ -11,7 +11,7 @@ version = "1.0.0"
 
 [[services]]
 name = "web"
-paths = [ "/" ]
+paths = [ "/nhid-audit/" ]
 localPort = 20027
 
 [services.development]
@@ -28,4 +28,4 @@ to = "/index.html"
 
 [services.env]
 PORT = "20027"
-BASE_PATH = "/"
+BASE_PATH = "/nhid-audit/"
