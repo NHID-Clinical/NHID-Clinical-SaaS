@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/nhid-saas/"
+title = "NHID Clinical SaaS Dashboard"
+version = "1.0.0"
+id = "artifacts/nhid-saas"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/nhid-saas/" ]
+localPort = 23223
+
+[services.development]
+run = "pnpm --filter @workspace/nhid-saas run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/nhid-saas", "run", "build" ]
+publicDir = "artifacts/nhid-saas/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23223"
+BASE_PATH = "/nhid-saas/"
