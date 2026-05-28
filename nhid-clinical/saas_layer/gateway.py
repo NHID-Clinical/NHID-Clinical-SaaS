@@ -36,13 +36,9 @@ from saas_layer.stripe_billing import (
 )
 from saas_layer.stripe_client import get_publishable_key
 
-# Import NHID core modules directly (read-only usage — core untouched)
-from nhid_event_store import (
-    append_events_batch,
-    get_events,
-    get_session_trace,
-)
-from nhid_policy import NHIDPolicyEngine
+# All NHID access goes through HTTP (nhid_client → Bridge port 8001).
+# No direct nhid_event_store / nhid_policy imports in the SaaS layer.
+from saas_layer import nhid_client
 
 _ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
 
@@ -56,8 +52,6 @@ _ADMIN_SESSION_TTL = 8 * 3600  # 8 hours
 
 # In-memory session store: token → expiry_timestamp
 _admin_sessions: Dict[str, float] = {}
-
-policy = NHIDPolicyEngine()
 
 app = FastAPI(
     title="NHID-Clinical SaaS API",
@@ -345,9 +339,9 @@ async def saas_trace(body: TraceEventRequest, org: Dict = Depends(subscription_g
         "policy_action": body.policy_action,
         "reason_code": body.reason_code,
         "response_text": body.response_text,
-        "policy_version": policy.POLICY_VERSION,
+        "policy_version": nhid_client.get_policy_version(),
     }
-    append_events_batch(body.session_id, [event], request_id)
+    nhid_client.append_event(body.session_id, [event], request_id)
     increment_usage(org["org_id"])
     log_request(org["org_id"], "/saas/trace", "POST", 200, body.session_id)
     return {"ok": True, "session_id": body.session_id, "request_id": request_id}
@@ -358,21 +352,19 @@ async def saas_trace(body: TraceEventRequest, org: Dict = Depends(subscription_g
 @app.get("/saas/proof/{session_id}")
 async def saas_proof(session_id: str, org: Dict = Depends(subscription_gated_org)):
     try:
-        trace = get_session_trace(session_id)
-        events = trace.get("events", [])
-        valid_chain = True
-        for i, ev in enumerate(events):
-            if i > 0 and not ev.get("id"):
-                valid_chain = False
+        proof = nhid_client.get_proof(session_id)
+        events = proof.get("events", [])
         log_request(org["org_id"], f"/saas/proof/{session_id}", "GET", 200, session_id)
         increment_usage(org["org_id"])
         return {
             "session_id": session_id,
             "org_id": org["org_id"],
-            "valid_chain": valid_chain,
-            "event_count": len(events),
-            "trace": trace,
+            "valid_chain": proof.get("chain_valid", True),
+            "event_count": proof.get("event_count", len(events)),
+            "trace": {"events": events},
         }
+    except nhid_client.NHIDClientError as exc:
+        raise HTTPException(status_code=502, detail=f"NHID Bridge error: {exc}")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -395,7 +387,10 @@ async def saas_recent(limit: int = 20, org: Dict = Depends(get_current_org)):
 
 @app.get("/saas/replay/{session_id}")
 async def saas_replay(session_id: str, org: Dict = Depends(subscription_gated_org)):
-    events = get_events(session_id)
+    try:
+        events = nhid_client.get_events(session_id)
+    except nhid_client.NHIDClientError as exc:
+        raise HTTPException(status_code=502, detail=f"NHID Bridge error: {exc}")
     log_request(org["org_id"], f"/saas/replay/{session_id}", "GET", 200, session_id)
     return {"session_id": session_id, "events": events, "event_count": len(events)}
 
