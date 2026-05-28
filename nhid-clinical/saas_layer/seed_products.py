@@ -3,6 +3,8 @@ NHID-Clinical SaaS — Stripe product seeder.
 Run once to create the three NHID subscription tiers in Stripe.
 Safe to run multiple times (idempotent — skips existing products).
 
+Uses stripe 15.x StripeClient v1 namespace.
+
 Usage:
     cd nhid-clinical
     python -m saas_layer.seed_products
@@ -17,19 +19,19 @@ PRODUCTS = [
         "slug": "l1",
         "name": "NHID L1",
         "description": "NHID Clinical SaaS — L1 tier. 10,000 API calls/day, audit trail, basic proof.",
-        "price_cents": 9900,   # $99/month
+        "price_cents": 9900,
     },
     {
         "slug": "l2",
         "name": "NHID L2",
         "description": "NHID Clinical SaaS — L2 tier. 100,000 API calls/day, full policy engine, replay, SSO-ready.",
-        "price_cents": 49900,  # $499/month
+        "price_cents": 49900,
     },
     {
         "slug": "l3",
         "name": "NHID L3",
         "description": "NHID Clinical SaaS — L3 tier. Unlimited API calls, enterprise SLA, priority support.",
-        "price_cents": 250000, # $2,500/month
+        "price_cents": 250000,
     },
 ]
 
@@ -40,11 +42,11 @@ def seed() -> None:
     client = get_stripe_client()
     print("Fetching existing products from Stripe...")
 
-    existing = client.products.list(active=True)
+    existing = client.v1.products.list({"active": True})
     existing_slugs = {
-        p.metadata.get(PLAN_METADATA_KEY)
+        p.metadata.to_dict().get(PLAN_METADATA_KEY)
         for p in existing.data
-        if p.metadata.get(PLAN_METADATA_KEY)
+        if p.metadata.to_dict().get(PLAN_METADATA_KEY)
     }
 
     for product_def in PRODUCTS:
@@ -54,17 +56,17 @@ def seed() -> None:
             continue
 
         print(f"  [create] {product_def['name']} @ ${product_def['price_cents']/100:.2f}/mo ...")
-        product = client.products.create(
-            name=product_def["name"],
-            description=product_def["description"],
-            metadata={PLAN_METADATA_KEY: slug},
-        )
-        price = client.prices.create(
-            product=product.id,
-            unit_amount=product_def["price_cents"],
-            currency="usd",
-            recurring={"interval": "month"},
-        )
+        product = client.v1.products.create({
+            "name": product_def["name"],
+            "description": product_def["description"],
+            "metadata": {PLAN_METADATA_KEY: slug},
+        })
+        price = client.v1.prices.create({
+            "product": product.id,
+            "unit_amount": product_def["price_cents"],
+            "currency": "usd",
+            "recurring": {"interval": "month"},
+        })
         print(f"    product_id={product.id}  price_id={price.id}")
 
     print("Done.")

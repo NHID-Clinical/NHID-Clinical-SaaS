@@ -2,6 +2,22 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, TraceRequest, Plan } from "@/lib/api";
 
+export function useGetPlans() {
+  return useQuery({
+    queryKey: ["billingPlans"],
+    queryFn: () => api.getPlans(),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useCreateCheckout() {
+  const apiKey = useApiKey();
+  return useMutation({
+    mutationFn: (data: { plan: Plan; successUrl: string; cancelUrl: string }) =>
+      api.createCheckout(apiKey!, data.plan, data.successUrl, data.cancelUrl),
+  });
+}
+
 export function useApiKey() {
   const [key, setKey] = useState(() => localStorage.getItem("nhid_api_key"));
 

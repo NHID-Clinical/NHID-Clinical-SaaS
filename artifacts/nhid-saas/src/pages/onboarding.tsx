@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 const schema = z.object({
   orgName: z.string().min(2, "Organization name must be at least 2 characters."),
-  plan: z.enum(["free", "pro", "enterprise"]),
+  plan: z.enum(["free", "l1", "l2", "l3"]),
   adminKey: z.string().min(5, "Admin key is required."),
 });
 
@@ -95,9 +95,10 @@ export default function Onboarding() {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="free">Free - Testing</SelectItem>
-                        <SelectItem value="pro">Pro - Production</SelectItem>
-                        <SelectItem value="enterprise">Enterprise - Scale</SelectItem>
+                        <SelectItem value="free">Free — 100 req/day (testing)</SelectItem>
+                        <SelectItem value="l1">L1 — $99/mo · 10k req/day</SelectItem>
+                        <SelectItem value="l2">L2 — $499/mo · 100k req/day</SelectItem>
+                        <SelectItem value="l3">L3 — $2,500/mo · Unlimited</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />

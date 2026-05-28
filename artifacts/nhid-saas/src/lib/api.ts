@@ -2,12 +2,16 @@
 
 const BASE = "/saas-api";
 
-export type Plan = "free" | "pro" | "enterprise";
+export type Plan = "free" | "l1" | "l2" | "l3";
+export type OrgStatus = "active" | "canceled" | "past_due";
 
 export interface OrgProfile {
   org_id: string;
   org_name: string;
   plan: Plan;
+  status: OrgStatus;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
   plan_details: PlanDetails;
   created_at: string;
   usage_count: number;
@@ -83,11 +87,28 @@ export interface CreateOrgResult {
   plan: Plan;
 }
 
+export interface StripePlanEntry {
+  plan: Plan;
+  name: string;
+  price_usd: number | null;
+  amount_cents?: number;
+  daily_limit: number | null;
+  features: string[];
+  price_id?: string;
+}
+
+export interface CheckoutResult {
+  checkout_url: string;
+  plan: Plan;
+}
+
 class ApiError extends Error {
   constructor(public status: number, public detail: string) {
     super(detail);
   }
 }
+
+export { ApiError };
 
 async function req<T>(
   path: string,
@@ -158,6 +179,30 @@ export const api = {
     req<{ session_id: string; events: unknown[]; event_count: number }>(
       `/saas/replay/${sessionId}`,
       {},
+      apiKey,
+    ),
+
+  /** List available subscription plans with Stripe price data. */
+  getPlans: () =>
+    req<{ plans: StripePlanEntry[] }>("/saas/billing/plans"),
+
+  /** Get the Stripe publishable key for client-side Stripe.js. */
+  getPublishableKey: () =>
+    req<{ publishable_key: string }>("/saas/billing/publishable-key"),
+
+  /** Create a Stripe Checkout session for the given plan. Returns checkout URL. */
+  createCheckout: (
+    apiKey: string,
+    plan: Plan,
+    successUrl: string,
+    cancelUrl: string,
+  ): Promise<CheckoutResult> =>
+    req<CheckoutResult>(
+      "/saas/billing/checkout",
+      {
+        method: "POST",
+        body: JSON.stringify({ plan, success_url: successUrl, cancel_url: cancelUrl }),
+      },
       apiKey,
     ),
 };

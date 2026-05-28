@@ -2,10 +2,16 @@
 NHID-Clinical SaaS — Stripe billing integration.
 Handles checkout session creation, webhook processing, and subscription-to-plan mapping.
 Does NOT touch NHID core.
+
+Uses stripe 15.x StripeClient v1 namespace:
+    client.v1.prices.list({"active": True})
+    client.v1.customers.create({"name": ..., "metadata": ...})
+    client.v1.checkout.sessions.create({...})
+    client.v1.subscriptions.retrieve(id)
 """
 import os
-import sqlite3
 import json
+import sqlite3
 import stripe
 from typing import Optional, Dict, Any
 
@@ -13,17 +19,14 @@ from saas_layer.stripe_client import get_stripe_client, get_secret_key
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "..", "saas.db")
 
-# Plan ↔ Stripe price ID mapping (populated by seed_products.py then stored here)
 PLAN_METADATA_KEY = "nhid_plan"
 
-# Maps plan slug → human label (price amounts are in Stripe)
 PLAN_SLUGS = {
     "l1": "NHID L1",
     "l2": "NHID L2",
     "l3": "NHID L3",
 }
 
-# Free tier daily limit (paid tiers are unlimited in the SaaS layer — Stripe is truth)
 FREE_DAILY_LIMIT = 100
 
 
@@ -46,21 +49,31 @@ def migrate_billing_columns() -> None:
         if "stripe_subscription_id" not in existing:
             conn.execute("ALTER TABLE orgs ADD COLUMN stripe_subscription_id TEXT")
         if "status" not in existing:
-            conn.execute("ALTER TABLE orgs ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
-        # Rename plan column values: old free/pro/enterprise kept; add l1/l2/l3
+            conn.execute(
+                "ALTER TABLE orgs ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
+            )
     conn.close()
+
+
+def _stripe_metadata(obj: Any) -> Dict[str, str]:
+    """Convert a Stripe StripeObject metadata field to a plain dict safely."""
+    try:
+        return obj.metadata.to_dict()
+    except Exception:
+        return {}
 
 
 def get_prices() -> list[Dict[str, Any]]:
     """List active NHID prices from Stripe (those with nhid_plan metadata)."""
     client = get_stripe_client()
-    prices = client.prices.list(active=True, expand=["data.product"])
+    prices = client.v1.prices.list({"active": True, "expand": ["data.product"]})
     result = []
     for price in prices.data:
         product = price.product
-        if not isinstance(product, stripe.Product):
+        if isinstance(product, str):
             continue
-        plan = product.metadata.get(PLAN_METADATA_KEY)
+        meta = _stripe_metadata(product)
+        plan = meta.get(PLAN_METADATA_KEY)
         if not plan:
             continue
         result.append({
@@ -85,14 +98,14 @@ def create_checkout_session(
     """Create a Stripe Checkout session for the given plan. Returns the checkout URL."""
     client = get_stripe_client()
 
-    # Find the price for this plan
     prices = get_prices()
     matching = [p for p in prices if p["plan"] == plan]
     if not matching:
-        raise ValueError(f"No Stripe price found for plan '{plan}'. Run seed_products.py first.")
+        raise ValueError(
+            f"No Stripe price found for plan '{plan}'. Run seed_products.py first."
+        )
     price_id = matching[0]["price_id"]
 
-    # Find or create a Stripe customer for this org
     conn = _get_conn()
     row = conn.execute(
         "SELECT stripe_customer_id FROM orgs WHERE org_id = ?", (org_id,)
@@ -103,23 +116,25 @@ def create_checkout_session(
     if existing_customer_id:
         customer_id = existing_customer_id
     else:
-        customer = client.customers.create(
-            name=org_name,
-            metadata={"nhid_org_id": org_id, "nhid_api_key": api_key},
-        )
+        customer = client.v1.customers.create({
+            "name": org_name,
+            "metadata": {"nhid_org_id": org_id, "nhid_api_key": api_key},
+        })
         customer_id = customer.id
         _update_org_stripe(org_id, stripe_customer_id=customer_id)
 
-    session = client.checkout.sessions.create(
-        customer=customer_id,
-        payment_method_types=["card"],
-        line_items=[{"price": price_id, "quantity": 1}],
-        mode="subscription",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={"nhid_org_id": org_id, "nhid_plan": plan},
-        subscription_data={"metadata": {"nhid_org_id": org_id, "nhid_plan": plan}},
-    )
+    session = client.v1.checkout.sessions.create({
+        "customer": customer_id,
+        "payment_method_types": ["card"],
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "mode": "subscription",
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "metadata": {"nhid_org_id": org_id, "nhid_plan": plan},
+        "subscription_data": {
+            "metadata": {"nhid_org_id": org_id, "nhid_plan": plan}
+        },
+    })
     return session.url
 
 
@@ -128,23 +143,21 @@ def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
     Verify and process a Stripe webhook. Returns {"handled": True, "event_type": ...}.
     Raises stripe.error.SignatureVerificationError on bad signature.
     """
-    secret_key = get_secret_key()
-    # Webhook secret stored as env var (set after first deploy)
     webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
     if webhook_secret:
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+        event_type = event["type"]
+        data_object = event["data"]["object"]
     else:
-        # Dev mode: parse without signature verification (warn only)
         import warnings
         warnings.warn(
             "STRIPE_WEBHOOK_SECRET not set — skipping signature verification (dev only).",
             stacklevel=2,
         )
-        event = stripe.Event.construct_from(json.loads(payload), secret_key)
-
-    event_type = event["type"]
-    data_object = event["data"]["object"]
+        parsed = json.loads(payload)
+        event_type = parsed.get("type", "")
+        data_object = parsed.get("data", {}).get("object", {})
 
     if event_type == "checkout.session.completed":
         _handle_checkout_completed(data_object)
@@ -158,7 +171,7 @@ def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
     return {"handled": True, "event_type": event_type}
 
 
-# ── Private webhook handlers ──────────────────────────────────────────────────
+# ── Private webhook handlers ───────────────────────────────────────────────────
 
 def _handle_checkout_completed(session: Dict) -> None:
     org_id = session.get("metadata", {}).get("nhid_org_id")
@@ -178,15 +191,14 @@ def _handle_checkout_completed(session: Dict) -> None:
 
 def _handle_invoice_paid(invoice: Dict) -> None:
     subscription_id = invoice.get("subscription")
-    customer_id = invoice.get("customer")
     if not subscription_id:
         return
-    # Fetch the subscription to get metadata
     client = get_stripe_client()
     try:
-        sub = client.subscriptions.retrieve(subscription_id)
-        org_id = sub.metadata.get("nhid_org_id")
-        plan = sub.metadata.get("nhid_plan")
+        sub = client.v1.subscriptions.retrieve(subscription_id)
+        meta = _stripe_metadata(sub)
+        org_id = meta.get("nhid_org_id")
+        plan = meta.get("nhid_plan")
         if org_id:
             _update_org_stripe(
                 org_id,
@@ -204,7 +216,6 @@ def _handle_subscription_deleted(subscription: Dict) -> None:
     if org_id:
         _update_org_stripe(org_id, status="canceled", plan="free")
     elif subscription_id:
-        # Fall back to lookup by subscription ID
         conn = _get_conn()
         row = conn.execute(
             "SELECT org_id FROM orgs WHERE stripe_subscription_id = ?",
@@ -274,7 +285,7 @@ def check_subscription_gate(org: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     plan = org.get("plan", "free")
     status = org.get("status", "active")
     if plan == "free":
-        return None  # free always passes; usage enforced by billing.py
+        return None
     if status != "active":
         return {
             "status_code": 402,

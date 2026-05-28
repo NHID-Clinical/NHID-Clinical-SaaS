@@ -58,6 +58,7 @@ app.add_middleware(
 )
 
 init_db()
+migrate_billing_columns()
 
 
 # ── Dependencies ──────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
 - [SaaS layer architecture](saas-layer.md) — SaaS gateway wraps NHID core via direct Python imports, not HTTP proxy; separate SQLite saas.db.
 - [Port assignments](port-assignments.md) — Fixed port map for all services in this project.
 - [NHID core constraint](nhid-core-constraint.md) — app.py/nhid_engine/nhid_policy/nhid_event_store/tests are read-only; only saas_layer/ and new files allowed.
+- [Stripe Python SDK v15 quirks](stripe-python-v15.md) — StripeClient(key), client.v1.* namespace, params as dicts, metadata.to_dict() not dict()/`.get()`.
