@@ -2,3 +2,5 @@
 - [Port assignments](port-assignments.md) — Fixed port map for all services in this project.
 - [NHID core constraint](nhid-core-constraint.md) — app.py/nhid_engine/nhid_policy/nhid_event_store/tests are read-only; only saas_layer/ and new files allowed.
 - [Stripe Python SDK v15 quirks](stripe-python-v15.md) — StripeClient(key), client.v1.* namespace, params as dicts, metadata.to_dict() not dict()/`.get()`.
+- [NHID Clinical dark design system](nhid-clinical-design.md) — approved glassmorphism tokens; force `.dark` class via useEffect in App.tsx; Raleway font; bg #070c17; teal #00c2a8; cyan #53d8fb.
+- [NHID proof events access bug](nhid-proof-events.md) — proof.trace is `{ events: [...] }` not a flat array; access via `(proof.trace as any)?.events`, not `Array.isArray(proof.trace)`.

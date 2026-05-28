@@ -1,13 +1,159 @@
 import { useState } from "react";
-import { Search, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Search, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight, Hash } from "lucide-react";
 import { format } from "date-fns";
-
-import { useProof } from "@/hooks/use-nhid";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useProof } from "@/hooks/use-nhid";
+
+const EVENT_TYPE_COLORS: Record<string, string> = {
+  session_started: "#00c2a8",
+  inference_requested: "#53d8fb",
+  policy_evaluation: "#fbbd24",
+  response_generated: "#a78bfa",
+  session_ended: "#94a3b8",
+};
+
+function EventCard({ evt, idx }: { evt: any; idx: number }) {
+  const [expanded, setExpanded] = useState(idx === 0);
+  const color = EVENT_TYPE_COLORS[evt.event_type] ?? "var(--nhid-teal)";
+
+  return (
+    <div
+      style={{
+        background: "var(--nhid-surface)",
+        border: `1px solid ${expanded ? `${color}30` : "var(--nhid-border)"}`,
+        borderRadius: 12,
+        transition: "border-color 0.2s",
+        overflow: "hidden",
+      }}
+    >
+      {/* Event header */}
+      <button
+        onClick={() => setExpanded(e => !e)}
+        style={{
+          width: "100%", padding: "12px 16px",
+          display: "flex", alignItems: "center", gap: 10,
+          background: "none", border: "none", cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        {/* Colored dot */}
+        <span
+          style={{
+            width: 8, height: 8, borderRadius: "50%",
+            background: color, flexShrink: 0,
+            boxShadow: `0 0 8px ${color}60`,
+          }}
+        />
+        {/* Event type */}
+        <span
+          style={{
+            fontSize: 12, fontWeight: 700, fontFamily: "monospace", color,
+          }}
+        >
+          {evt.event_type}
+        </span>
+        {/* State transition badge */}
+        {evt.state_before && evt.state_after && (
+          <span
+            style={{
+              fontSize: 10, fontFamily: "monospace", color: "var(--nhid-muted)",
+              background: "rgba(255,255,255,0.04)", borderRadius: 4, padding: "2px 7px",
+              border: "1px solid rgba(255,255,255,0.06)",
+            }}
+          >
+            {evt.state_before} → {evt.state_after}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {evt.timestamp && (
+            <span style={{ fontSize: 10, color: "var(--nhid-muted)", fontFamily: "monospace" }}>
+              {format(new Date(evt.timestamp), "HH:mm:ss.SSS")}
+            </span>
+          )}
+          {expanded
+            ? <ChevronDown size={13} style={{ color: "var(--nhid-muted)" }} />
+            : <ChevronRight size={13} style={{ color: "var(--nhid-muted)" }} />
+          }
+        </span>
+      </button>
+
+      {/* Expanded content */}
+      {expanded && (
+        <div style={{ borderTop: "1px solid var(--nhid-border)", padding: "14px 16px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: evt.input_text || evt.response_text ? 12 : 0 }}>
+            {evt.policy_action && (
+              <div>
+                <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nhid-muted)", marginBottom: 4 }}>
+                  Policy Action
+                </div>
+                <span
+                  style={{
+                    display: "inline-block", fontSize: 11, fontWeight: 700,
+                    padding: "3px 8px", borderRadius: 4,
+                    background: evt.policy_action === "allow" ? "rgba(0,194,168,0.1)" : "rgba(239,68,68,0.1)",
+                    color: evt.policy_action === "allow" ? "var(--nhid-teal)" : "#ef4444",
+                    border: `1px solid ${evt.policy_action === "allow" ? "rgba(0,194,168,0.25)" : "rgba(239,68,68,0.25)"}`,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {evt.policy_action} {evt.reason_code ? `· ${evt.reason_code}` : ""}
+                </span>
+              </div>
+            )}
+            {evt.agent_id && (
+              <div>
+                <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nhid-muted)", marginBottom: 4 }}>
+                  Agent ID
+                </div>
+                <code style={{ fontSize: 11, color: "var(--nhid-cyan)", fontFamily: "monospace" }}>{evt.agent_id}</code>
+              </div>
+            )}
+          </div>
+          {evt.input_text && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nhid-muted)", marginBottom: 6 }}>
+                Input
+              </div>
+              <div
+                style={{
+                  background: "rgba(0,0,0,0.25)", border: "1px solid var(--nhid-border)",
+                  borderRadius: 6, padding: "8px 12px",
+                  fontSize: 12, color: "var(--nhid-text)", lineHeight: 1.6,
+                }}
+              >
+                {evt.input_text}
+              </div>
+            </div>
+          )}
+          {evt.response_text && (
+            <div>
+              <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nhid-muted)", marginBottom: 6 }}>
+                Response
+              </div>
+              <div
+                style={{
+                  background: "rgba(0,0,0,0.25)", border: "1px solid var(--nhid-border)",
+                  borderRadius: 6, padding: "8px 12px",
+                  fontSize: 12, color: "var(--nhid-text)", lineHeight: 1.6,
+                }}
+              >
+                {evt.response_text}
+              </div>
+            </div>
+          )}
+          {evt.hash && (
+            <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}>
+              <Hash size={10} style={{ color: "var(--nhid-muted)", flexShrink: 0 }} />
+              <code style={{ fontSize: 9, color: "var(--nhid-muted)", fontFamily: "monospace", wordBreak: "break-all" }}>
+                {evt.hash}
+              </code>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Proof() {
   const [searchInput, setSearchInput] = useState("");
@@ -17,140 +163,206 @@ export default function Proof() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (searchInput.trim()) {
-      setActiveSession(searchInput.trim());
-    }
+    if (searchInput.trim()) setActiveSession(searchInput.trim());
   };
 
+  const events: any[] = Array.isArray((proof?.trace as any)?.events)
+    ? (proof?.trace as any).events
+    : Array.isArray(proof?.trace)
+      ? (proof?.trace as any)
+      : [];
+
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-400">
+      {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Audit Trail Proof</h1>
-        <p className="text-muted-foreground mt-1">
+        <h1 style={{ fontSize: 26, fontWeight: 800, color: "var(--nhid-text)", letterSpacing: "-0.02em", marginBottom: 4 }}>
+          Audit Trail Proof
+        </h1>
+        <p style={{ fontSize: 13, color: "var(--nhid-muted)" }}>
           Verify cryptographic integrity of session event chains.
         </p>
       </div>
 
-      <Card className="border-border">
-        <CardContent className="pt-6">
-          <form onSubmit={handleSearch} className="flex gap-3">
-            <Input 
-              placeholder="Enter Session ID (e.g. sess_abc123)" 
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              className="font-mono"
+      {/* Search card */}
+      <div
+        style={{
+          background: "var(--nhid-surface)", border: "1px solid var(--nhid-border)",
+          borderRadius: 14, padding: "20px",
+        }}
+      >
+        <form onSubmit={handleSearch} style={{ display: "flex", gap: 10 }}>
+          <div style={{ flex: 1, position: "relative" }}>
+            <Search
+              size={14}
+              style={{
+                position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)",
+                color: "var(--nhid-muted)", pointerEvents: "none",
+              }}
             />
-            <Button type="submit">
-              <Search className="w-4 h-4 mr-2" />
-              Verify Chain
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+            <input
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              placeholder="Enter Session ID (e.g. sess_abc123)"
+              style={{
+                width: "100%", paddingLeft: 36, paddingRight: 14, paddingTop: 11, paddingBottom: 11,
+                borderRadius: 9, background: "rgba(255,255,255,0.05)",
+                border: "1px solid var(--nhid-border)", color: "var(--nhid-text)",
+                fontSize: 13, fontFamily: "monospace", outline: "none",
+                transition: "border-color 0.2s",
+              }}
+              onFocus={e => e.target.style.borderColor = "rgba(0,194,168,0.4)"}
+              onBlur={e => e.target.style.borderColor = "var(--nhid-border)"}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={!searchInput.trim()}
+            style={{
+              padding: "11px 20px", borderRadius: 9,
+              background: searchInput.trim() ? "linear-gradient(135deg, #00c2a8, #53d8fb)" : "rgba(255,255,255,0.06)",
+              border: "none", color: searchInput.trim() ? "#070c17" : "var(--nhid-muted)",
+              fontSize: 13, fontWeight: 700, cursor: searchInput.trim() ? "pointer" : "not-allowed",
+              fontFamily: "'Raleway', sans-serif",
+              boxShadow: searchInput.trim() ? "0 0 20px rgba(0,194,168,0.25)" : "none",
+              flexShrink: 0, transition: "all 0.2s",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Verify Chain
+          </button>
+        </form>
+      </div>
 
+      {/* Results */}
       {activeSession && (
-        <div className="space-y-6">
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {isLoading && (
-            <div className="space-y-4">
-              <Skeleton className="h-32 w-full" />
-              <Skeleton className="h-64 w-full" />
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Skeleton style={{ height: 80, borderRadius: 14 }} />
+              {[...Array(3)].map((_, i) => <Skeleton key={i} style={{ height: 56, borderRadius: 12 }} />)}
             </div>
           )}
 
           {isError && (
-             <Card className="border-destructive bg-destructive/5">
-               <CardContent className="pt-6 flex items-center gap-3 text-destructive">
-                 <ShieldAlert className="w-6 h-6" />
-                 <div>
-                   <p className="font-semibold">Verification Failed</p>
-                   <p className="text-sm">{(error as any)?.message || "Session not found or chain corrupted."}</p>
-                 </div>
-               </CardContent>
-             </Card>
+            <div
+              style={{
+                background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.25)",
+                borderRadius: 14, padding: "20px 22px",
+                display: "flex", alignItems: "center", gap: 12,
+              }}
+            >
+              <div
+                style={{
+                  width: 36, height: 36, borderRadius: 10, flexShrink: 0,
+                  background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}
+              >
+                <ShieldAlert size={16} style={{ color: "#ef4444" }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#ef4444", marginBottom: 3 }}>
+                  Verification Failed
+                </div>
+                <div style={{ fontSize: 12, color: "var(--nhid-muted)" }}>
+                  {(error as any)?.message || "Session not found or chain integrity could not be verified."}
+                </div>
+              </div>
+            </div>
           )}
 
           {proof && (
             <>
-              <Card className="border-border">
-                <CardHeader className="flex flex-row items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">Chain Status</CardTitle>
-                    <CardDescription className="font-mono mt-1 text-xs">{proof.session_id}</CardDescription>
-                  </div>
-                  {proof.valid_chain ? (
-                    <Badge variant="default" className="bg-green-600 hover:bg-green-700 text-white gap-1 py-1">
-                      <ShieldCheck className="w-3 h-3" /> Valid Chain
-                    </Badge>
-                  ) : (
-                    <Badge variant="destructive" className="gap-1 py-1">
-                      <ShieldAlert className="w-3 h-3" /> Broken Chain
-                    </Badge>
-                  )}
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
-                      <div className="text-xs text-muted-foreground">Event Count</div>
-                      <div className="text-xl font-bold font-mono">{proof.event_count}</div>
+              {/* Chain status banner */}
+              <div
+                style={{
+                  background: proof.valid_chain
+                    ? "rgba(0,194,168,0.07)"
+                    : "rgba(239,68,68,0.06)",
+                  border: `1px solid ${proof.valid_chain ? "rgba(0,194,168,0.3)" : "rgba(239,68,68,0.25)"}`,
+                  borderRadius: 14, padding: "18px 22px",
+                  boxShadow: proof.valid_chain ? "0 0 40px rgba(0,194,168,0.08)" : "none",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div
+                      style={{
+                        width: 42, height: 42, borderRadius: 12, flexShrink: 0,
+                        background: proof.valid_chain ? "rgba(0,194,168,0.12)" : "rgba(239,68,68,0.1)",
+                        border: `1px solid ${proof.valid_chain ? "rgba(0,194,168,0.25)" : "rgba(239,68,68,0.2)"}`,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}
+                    >
+                      {proof.valid_chain
+                        ? <ShieldCheck size={18} style={{ color: "var(--nhid-teal)" }} />
+                        : <ShieldAlert size={18} style={{ color: "#ef4444" }} />}
                     </div>
                     <div>
-                      <div className="text-xs text-muted-foreground">Org ID</div>
-                      <div className="text-sm font-medium font-mono">{proof.org_id}</div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <div className="space-y-4">
-                <h3 className="font-medium text-lg border-b border-border pb-2">Event Ledger</h3>
-                {Array.isArray(proof.trace) && proof.trace.length > 0 ? (
-                  <div className="relative border-l-2 border-border ml-3 space-y-6 pb-4">
-                    {proof.trace.map((evt: any, i: number) => (
-                      <div key={i} className="relative pl-6">
-                        <div className="absolute w-3 h-3 bg-card border-2 border-primary rounded-full -left-[7px] top-1.5" />
-                        <Card className="border-border text-sm">
-                          <CardHeader className="p-3 pb-2 bg-secondary/30 flex flex-row items-center justify-between border-b border-border">
-                            <span className="font-mono font-bold text-primary">{evt.event_type}</span>
-                            {evt.timestamp && (
-                               <span className="text-xs text-muted-foreground font-mono">
-                                 {format(new Date(evt.timestamp), "HH:mm:ss.SSS")}
-                               </span>
-                            )}
-                          </CardHeader>
-                          <CardContent className="p-3 grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs">
-                            <div>
-                              <span className="text-muted-foreground">State Transition: </span>
-                              <span className="text-foreground">{evt.state_before} &rarr; {evt.state_after}</span>
-                            </div>
-                            {evt.policy_action && (
-                               <div>
-                                 <span className="text-muted-foreground">Policy: </span>
-                                 <Badge variant={evt.policy_action === 'allow' ? 'outline' : 'destructive'} className="text-[10px]">
-                                   {evt.policy_action} {evt.reason_code && `(${evt.reason_code})`}
-                                 </Badge>
-                               </div>
-                            )}
-                            {evt.input_text && (
-                              <div className="col-span-full border-t border-border pt-2 mt-1">
-                                <span className="text-muted-foreground block mb-1">Input:</span>
-                                <div className="bg-secondary/50 p-2 rounded text-foreground">{evt.input_text}</div>
-                              </div>
-                            )}
-                            {evt.response_text && (
-                              <div className="col-span-full">
-                                <span className="text-muted-foreground block mb-1">Response:</span>
-                                <div className="bg-secondary/50 p-2 rounded text-foreground">{evt.response_text}</div>
-                              </div>
-                            )}
-                          </CardContent>
-                        </Card>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: proof.valid_chain ? "var(--nhid-teal)" : "#ef4444", marginBottom: 3 }}>
+                        {proof.valid_chain ? "Chain Integrity Verified" : "Chain Integrity Broken"}
                       </div>
-                    ))}
+                      <code style={{ fontSize: 11, color: "var(--nhid-muted)", fontFamily: "monospace" }}>
+                        {proof.session_id}
+                      </code>
+                    </div>
                   </div>
-                ) : (
-                  <div className="text-muted-foreground italic">No events found in payload.</div>
-                )}
+
+                  <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: "var(--nhid-text)", letterSpacing: "-0.02em" }}>
+                        {proof.event_count}
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--nhid-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                        Events
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "var(--nhid-text)", fontFamily: "monospace" }}>
+                        {proof.org_id?.slice(0, 8)}…
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--nhid-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                        Org ID
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
+
+              {/* Timeline */}
+              {events.length > 0 ? (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nhid-muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>
+                    Event Ledger — {events.length} records
+                  </div>
+                  <div style={{ position: "relative" }}>
+                    {/* Connecting line */}
+                    <div
+                      style={{
+                        position: "absolute", left: 6, top: 12, bottom: 12,
+                        width: 1, background: "linear-gradient(to bottom, var(--nhid-teal), rgba(0,194,168,0.1))",
+                        opacity: 0.35,
+                      }}
+                    />
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 24 }}>
+                      {events.map((evt: any, i: number) => (
+                        <EventCard key={i} evt={evt} idx={i} />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    textAlign: "center", padding: "40px 20px",
+                    border: "1px dashed var(--nhid-border)", borderRadius: 14,
+                    color: "var(--nhid-muted)",
+                  }}
+                >
+                  <div style={{ fontSize: 13 }}>No events found in this session.</div>
+                </div>
+              )}
             </>
           )}
         </div>

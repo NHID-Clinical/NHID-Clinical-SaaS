@@ -2,6 +2,7 @@ import { Switch, Route, Router as WouterRouter, Redirect } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useEffect } from "react";
 
 import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/layout";
@@ -17,18 +18,14 @@ const queryClient = new QueryClient();
 
 function ProtectedRoute({ component: Component, ...rest }: any) {
   const apiKey = useApiKey();
-  
-  if (!apiKey) {
-    return <Redirect to="/" />;
-  }
-  
+  if (!apiKey) return <Redirect to="/" />;
   return <Component {...rest} />;
 }
 
 function Router() {
   return (
     <Switch>
-      {/* Admin portal — standalone, no shared layout, not in nav */}
+      {/* Admin portal — standalone, no shared layout */}
       <Route path="/admin" component={AdminPage} />
 
       {/* Standard app routes */}
@@ -50,6 +47,10 @@ function Router() {
 }
 
 function App() {
+  useEffect(() => {
+    document.documentElement.classList.add("dark");
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
