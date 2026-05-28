@@ -99,6 +99,7 @@ outputType = "console"
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
+integrations = ["stripe:1.0.0"]
 
 [postMerge]
 path = "scripts/post-merge.sh"

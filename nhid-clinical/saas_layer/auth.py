@@ -23,13 +23,16 @@ def init_db() -> None:
     with conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS orgs (
-                org_id      TEXT PRIMARY KEY,
-                org_name    TEXT NOT NULL,
-                api_key     TEXT NOT NULL UNIQUE,
-                plan        TEXT NOT NULL DEFAULT 'free',
-                created_at  TEXT NOT NULL,
-                usage_count INTEGER NOT NULL DEFAULT 0,
-                active      INTEGER NOT NULL DEFAULT 1
+                org_id                  TEXT PRIMARY KEY,
+                org_name                TEXT NOT NULL,
+                api_key                 TEXT NOT NULL UNIQUE,
+                plan                    TEXT NOT NULL DEFAULT 'free',
+                status                  TEXT NOT NULL DEFAULT 'active',
+                stripe_customer_id      TEXT,
+                stripe_subscription_id  TEXT,
+                created_at              TEXT NOT NULL,
+                usage_count             INTEGER NOT NULL DEFAULT 0,
+                active                  INTEGER NOT NULL DEFAULT 1
             )
         """)
         conn.execute("""
@@ -45,6 +48,10 @@ def init_db() -> None:
         """)
     conn.close()
 
+    # Add billing columns to existing DBs (idempotent)
+    from saas_layer.stripe_billing import migrate_billing_columns
+    migrate_billing_columns()
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -56,7 +63,9 @@ def create_org(org_name: str, plan: str = "free") -> Dict[str, Any]:
     conn = _get_conn()
     with conn:
         conn.execute(
-            "INSERT INTO orgs (org_id, org_name, api_key, plan, created_at) VALUES (?, ?, ?, ?, ?)",
+            """INSERT INTO orgs
+               (org_id, org_name, api_key, plan, status, created_at)
+               VALUES (?, ?, ?, ?, 'active', ?)""",
             (org_id, org_name, api_key, plan, _now()),
         )
     conn.close()
@@ -91,5 +100,8 @@ def list_orgs() -> list:
 def increment_usage(org_id: str) -> None:
     conn = _get_conn()
     with conn:
-        conn.execute("UPDATE orgs SET usage_count = usage_count + 1 WHERE org_id = ?", (org_id,))
+        conn.execute(
+            "UPDATE orgs SET usage_count = usage_count + 1 WHERE org_id = ?",
+            (org_id,),
+        )
     conn.close()

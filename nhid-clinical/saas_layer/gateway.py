@@ -1,6 +1,6 @@
 """
 NHID-Clinical SaaS Gateway.
-Wraps the NHID core engine with multi-tenant auth + usage tracking.
+Wraps the NHID core engine with multi-tenant auth, usage tracking, and Stripe billing.
 Core files (app.py, nhid_engine, nhid_policy, nhid_event_store) are NOT modified.
 """
 import os
@@ -13,9 +13,9 @@ if _CLINICAL_DIR not in sys.path:
 
 from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
-from typing import Optional, List, Any, Dict
+from typing import Optional, Any, Dict
 
 from saas_layer.auth import (
     init_db, create_org, validate_api_key, get_org,
@@ -23,14 +23,20 @@ from saas_layer.auth import (
 )
 from saas_layer.usage import log_request, get_usage_summary, get_recent_activity, get_global_stats
 from saas_layer.billing import get_plan, check_rate_limit, get_upgrade_path
+from saas_layer.stripe_billing import (
+    check_subscription_gate,
+    create_checkout_session,
+    handle_webhook,
+    get_prices,
+    migrate_billing_columns,
+)
+from saas_layer.stripe_client import get_publishable_key
 
 # Import NHID core modules directly (read-only usage — core untouched)
 from nhid_event_store import (
     append_events_batch,
     get_events,
     get_session_trace,
-    is_duplicate_request,
-    get_response_for_request,
 )
 from nhid_policy import NHIDPolicyEngine
 
@@ -41,7 +47,7 @@ policy = NHIDPolicyEngine()
 app = FastAPI(
     title="NHID-Clinical SaaS API",
     description="Multi-tenant audit platform powered by NHID core engine.",
-    version="1.0.0",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -54,7 +60,7 @@ app.add_middleware(
 init_db()
 
 
-# ── Dependency: resolve org from API key ──────────────────────────────────────
+# ── Dependencies ──────────────────────────────────────────────────────────────
 
 def get_current_org(x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     if not x_api_key:
@@ -70,11 +76,23 @@ def require_admin(x_admin_key: Optional[str] = Header(default=None)) -> None:
         raise HTTPException(status_code=403, detail="Admin key required")
 
 
+def subscription_gated_org(org: Dict = Depends(get_current_org)) -> Dict[str, Any]:
+    """
+    Resolves the org AND enforces Stripe subscription state.
+    Raises HTTP 402 if the org has a paid plan with an inactive subscription.
+    Free orgs pass unconditionally (usage limits enforced separately).
+    """
+    block = check_subscription_gate(org)
+    if block:
+        raise HTTPException(status_code=block["status_code"], detail=block["detail"])
+    return org
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/saas/health")
 async def health():
-    return {"ok": True, "service": "nhid-saas-gateway", "version": "1.0.0"}
+    return {"ok": True, "service": "nhid-saas-gateway", "version": "2.0.0"}
 
 
 # ── Admin: org management ─────────────────────────────────────────────────────
@@ -107,6 +125,9 @@ async def get_my_org(org: Dict = Depends(get_current_org)):
         "org_id": org["org_id"],
         "org_name": org["org_name"],
         "plan": org["plan"],
+        "status": org.get("status", "active"),
+        "stripe_customer_id": org.get("stripe_customer_id"),
+        "stripe_subscription_id": org.get("stripe_subscription_id"),
         "plan_details": plan,
         "created_at": org["created_at"],
         "usage_count": org["usage_count"],
@@ -115,7 +136,87 @@ async def get_my_org(org: Dict = Depends(get_current_org)):
     }
 
 
-# ── Trace: append events ──────────────────────────────────────────────────────
+# ── Billing: Stripe checkout + webhook ────────────────────────────────────────
+
+class CheckoutRequest(BaseModel):
+    plan: str
+    success_url: str
+    cancel_url: str
+
+
+@app.post("/saas/billing/checkout")
+async def billing_checkout(body: CheckoutRequest, org: Dict = Depends(get_current_org)):
+    """Create a Stripe Checkout session for the requested plan. Returns checkout_url."""
+    allowed_plans = {"l1", "l2", "l3"}
+    if body.plan not in allowed_plans:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid plan '{body.plan}'. Must be one of: {', '.join(sorted(allowed_plans))}",
+        )
+    try:
+        url = create_checkout_session(
+            org_id=org["org_id"],
+            org_name=org["org_name"],
+            api_key=org["api_key"],
+            plan=body.plan,
+            success_url=body.success_url,
+            cancel_url=body.cancel_url,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {exc}")
+    return {"checkout_url": url, "plan": body.plan}
+
+
+@app.post("/saas/billing/webhook")
+async def billing_webhook(request: Request):
+    """
+    Stripe webhook receiver.
+    Handles: checkout.session.completed, invoice.paid,
+             customer.subscription.deleted, customer.subscription.updated
+    """
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    try:
+        result = handle_webhook(payload, sig_header)
+    except Exception as exc:
+        # Return 400 so Stripe retries; log locally
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    return result
+
+
+@app.get("/saas/billing/plans")
+async def billing_plans():
+    """List available NHID plans with Stripe price IDs (if seeded)."""
+    from saas_layer.billing import PLANS
+    try:
+        stripe_prices = get_prices()
+        price_map = {p["plan"]: p for p in stripe_prices}
+    except Exception:
+        price_map = {}
+
+    result = []
+    for slug, plan in PLANS.items():
+        entry = {**plan, "plan": slug}
+        if slug in price_map:
+            entry["price_id"] = price_map[slug]["price_id"]
+            entry["amount_cents"] = price_map[slug]["amount_cents"]
+        result.append(entry)
+    return {"plans": result}
+
+
+@app.get("/saas/billing/publishable-key")
+async def billing_publishable_key():
+    """Return the Stripe publishable key for client-side Stripe.js usage."""
+    try:
+        key = get_publishable_key()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Stripe credentials unavailable: {exc}")
+    return {"publishable_key": key}
+
+
+# ── Trace: append events (subscription-gated) ─────────────────────────────────
 
 class TraceEventRequest(BaseModel):
     session_id: str
@@ -130,11 +231,14 @@ class TraceEventRequest(BaseModel):
 
 
 @app.post("/saas/trace")
-async def saas_trace(body: TraceEventRequest, org: Dict = Depends(get_current_org)):
+async def saas_trace(body: TraceEventRequest, org: Dict = Depends(subscription_gated_org)):
     usage = get_usage_summary(org["org_id"])
     rate = check_rate_limit(org["org_id"], org["plan"], usage["today_requests"])
     if not rate["allowed"]:
-        raise HTTPException(status_code=429, detail=f"Daily limit reached ({rate['limit']} req/day). Upgrade to continue.")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily limit reached ({rate['limit']} req/day). Upgrade to continue.",
+        )
 
     request_id = body.request_id or f"{body.session_id}:{body.event_type}:{body.state_before}"
     event = {
@@ -153,14 +257,13 @@ async def saas_trace(body: TraceEventRequest, org: Dict = Depends(get_current_or
     return {"ok": True, "session_id": body.session_id, "request_id": request_id}
 
 
-# ── Proof: retrieve audit trail ───────────────────────────────────────────────
+# ── Proof: retrieve audit trail (subscription-gated) ─────────────────────────
 
 @app.get("/saas/proof/{session_id}")
-async def saas_proof(session_id: str, org: Dict = Depends(get_current_org)):
+async def saas_proof(session_id: str, org: Dict = Depends(subscription_gated_org)):
     try:
         trace = get_session_trace(session_id)
         events = trace.get("events", [])
-        # Validate chain integrity
         valid_chain = True
         for i, ev in enumerate(events):
             if i > 0 and not ev.get("id"):
@@ -192,10 +295,10 @@ async def saas_recent(limit: int = 20, org: Dict = Depends(get_current_org)):
     return {"activity": get_recent_activity(org["org_id"], limit=limit)}
 
 
-# ── Replay ────────────────────────────────────────────────────────────────────
+# ── Replay (subscription-gated) ───────────────────────────────────────────────
 
 @app.get("/saas/replay/{session_id}")
-async def saas_replay(session_id: str, org: Dict = Depends(get_current_org)):
+async def saas_replay(session_id: str, org: Dict = Depends(subscription_gated_org)):
     events = get_events(session_id)
     log_request(org["org_id"], f"/saas/replay/{session_id}", "GET", 200, session_id)
     return {"session_id": session_id, "events": events, "event_count": len(events)}
