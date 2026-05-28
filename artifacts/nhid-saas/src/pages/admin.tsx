@@ -50,7 +50,8 @@ async function adminFetch<T>(path: string, token: string, opts: RequestInit = {}
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(body.detail ?? res.statusText);
+    // Prefix with HTTP status so callers can match precisely (e.g. "401: …")
+    throw new Error(`${res.status}: ${body.detail ?? res.statusText}`);
   }
   return res.json();
 }
@@ -345,8 +346,9 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
       setStats(orgsData.global_stats);
       setActivity(usageData.recent_activity);
     } catch (err: any) {
-      if (err.message?.includes("401") || err.message?.includes("session") || err.message?.includes("Unauthorized")) {
+      if (err.message?.startsWith("401:")) {
         onLogout();
+        return;
       }
       setError(err.message ?? "Failed to load data");
     } finally {
@@ -712,7 +714,35 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem("nhid_admin_token"));
+  // Token starts null — we never trust localStorage until the server confirms it.
+  const [token, setToken] = useState<string | null>(null);
+  const [validating, setValidating] = useState(true);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("nhid_admin_token");
+    if (!stored) {
+      setValidating(false);
+      return;
+    }
+    // Validate stored token against the server before showing anything.
+    // Any truthy-but-invalid value (including manually-set garbage) is rejected here.
+    fetch(`${ADMIN_BASE}/session`, {
+      headers: { "X-Admin-Session": stored },
+    })
+      .then(res => {
+        if (res.ok) {
+          setToken(stored);
+        } else {
+          // Token is expired or invalid — wipe it silently.
+          localStorage.removeItem("nhid_admin_token");
+        }
+      })
+      .catch(() => {
+        // Network error — don't grant access; wipe and force re-login.
+        localStorage.removeItem("nhid_admin_token");
+      })
+      .finally(() => setValidating(false));
+  }, []);
 
   const handleLogin = (t: string) => setToken(t);
 
@@ -720,6 +750,31 @@ export default function AdminPage() {
     localStorage.removeItem("nhid_admin_token");
     setToken(null);
   };
+
+  if (validating) {
+    return (
+      <div
+        style={{
+          minHeight: "100dvh", display: "flex", alignItems: "center",
+          justifyContent: "center", background: "var(--nhid-bg)",
+          flexDirection: "column", gap: 16,
+        }}
+      >
+        <div
+          style={{
+            width: 32, height: 32, borderRadius: "50%",
+            border: "2px solid rgba(0,194,168,0.2)",
+            borderTopColor: "#00c2a8",
+            animation: "spin 0.8s linear infinite",
+          }}
+        />
+        <span style={{ fontSize: 12, color: "var(--nhid-muted)", fontFamily: "'Raleway', sans-serif" }}>
+          Verifying session…
+        </span>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   if (!token) return <LoginForm onLogin={handleLogin} />;
   return <AdminDashboard token={token} onLogout={handleLogout} />;
