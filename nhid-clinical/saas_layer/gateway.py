@@ -3,12 +3,19 @@ NHID-Clinical SaaS Gateway.
 Wraps the NHID core engine with multi-tenant auth, usage tracking, and Stripe billing.
 Core files (app.py, nhid_engine, nhid_policy, nhid_event_store) are NOT modified.
 """
+import logging
 import os
 import sys
 import uuid
 import time
 import urllib.request
 import urllib.error
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+_logger = logging.getLogger("nhid.saas")
 
 # Ensure nhid-clinical/ is on the path so core modules are importable
 _CLINICAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,6 +31,8 @@ from typing import Optional, Any, Dict
 from saas_layer.auth import (
     init_db, create_org, validate_api_key, get_org,
     list_orgs, increment_usage,
+    create_admin_session, validate_admin_session,
+    delete_admin_session, purge_expired_admin_sessions,
 )
 from saas_layer.usage import log_request, get_usage_summary, get_recent_activity, get_global_stats
 from saas_layer.billing import get_plan, check_rate_limit, get_upgrade_path
@@ -45,13 +54,11 @@ _ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
 # ── NHID core base URL (SaaS pings core via HTTP for health checks) ───────────
 _NHID_BASE_URL = os.environ.get("NHID_BASE_URL", "http://localhost:8000")
 
-# ── Admin portal credentials (read from env; safe defaults for dev) ───────────
-_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-_ADMIN_PASS = os.environ.get("ADMIN_PASS", "nhid-admin-2026")
+# ── Admin credentials — deterministic, no env-var dependency ─────────────────
+# These are intentionally hardcoded so the portal is always accessible.
+_ADMIN_USER = "admin"
+_ADMIN_PASS = "nhidclinical1626"
 _ADMIN_SESSION_TTL = 8 * 3600  # 8 hours
-
-# In-memory session store: token → expiry_timestamp
-_admin_sessions: Dict[str, float] = {}
 
 app = FastAPI(
     title="NHID-Clinical SaaS API",
@@ -87,21 +94,19 @@ def require_admin(x_admin_key: Optional[str] = Header(default=None)) -> None:
 
 
 def require_admin_session(x_admin_session: Optional[str] = Header(default=None)) -> str:
-    """Validate an admin session token issued by POST /admin/login."""
+    """Validate an admin session token (SQLite-backed, survives restarts)."""
     if not x_admin_session:
         raise HTTPException(status_code=401, detail="Admin session token required (X-Admin-Session header)")
-    expiry = _admin_sessions.get(x_admin_session)
-    if expiry is None or time.time() > expiry:
-        _admin_sessions.pop(x_admin_session, None)
+    if not validate_admin_session(x_admin_session):
         raise HTTPException(status_code=401, detail="Admin session expired or invalid. Please log in again.")
     return x_admin_session
 
 
 def subscription_gated_org(org: Dict = Depends(get_current_org)) -> Dict[str, Any]:
     """
-    Resolves the org AND enforces Stripe subscription state.
-    Raises HTTP 402 if the org has a paid plan with an inactive subscription.
-    Free orgs pass unconditionally (usage limits enforced separately).
+    Resolves the org AND enforces billing gate.
+    Blocks any org with status != 'active' (402 Payment Required).
+    Admin routes bypass this — they use require_admin_session instead.
     """
     block = check_subscription_gate(org)
     if block:
@@ -162,26 +167,18 @@ async def saas_health():
 @app.get("/saas/system/status", tags=["Health"])
 async def system_status():
     """
-    Full system status: NHID core, SaaS layer, and Stripe.
-    Used by monitoring and the admin portal to surface service health.
+    Flat system status: nhid/saas/stripe state + org count + today's usage.
+    Used by monitoring and the admin portal.
     """
-    nhid_status = _probe_nhid()
+    nhid_reachable = _probe_nhid()
     stripe_status = _probe_stripe()
     stats = get_global_stats()
     return {
-        "nhid": {
-            "status": "up" if nhid_status == "reachable" else "down",
-            "url": _NHID_BASE_URL,
-        },
-        "saas": {
-            "status": "up",
-            "orgs": stats.get("total_orgs", 0),
-            "requests_today": stats.get("orgs_active_today", 0),
-            "total_requests": stats.get("total_requests", 0),
-        },
-        "stripe": {
-            "status": stripe_status,
-        },
+        "nhid": "up" if nhid_reachable == "reachable" else "down",
+        "saas": "up",
+        "stripe": "ok" if stripe_status == "configured" else "error",
+        "org_count": stats.get("total_orgs", 0),
+        "usage_today": stats.get("orgs_active_today", 0),
     }
 
 
@@ -402,21 +399,41 @@ class AdminLoginRequest(BaseModel):
     password: str
 
 
-@app.post("/admin/login")
+@app.post("/admin/login", tags=["Admin"])
 async def admin_login(body: AdminLoginRequest):
     """
-    Issue an admin session token.
-    Credentials: ADMIN_USER / ADMIN_PASS (hardcoded, internal only).
+    Issue a persistent admin session token (SQLite-backed, 8-hour TTL).
+    Credentials are deterministic — never locked out by missing env vars.
     """
     if body.username != _ADMIN_USER or body.password != _ADMIN_PASS:
+        _logger.warning("ADMIN_LOGIN_FAILED username=%s", body.username)
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
+
     token = str(uuid.uuid4())
-    _admin_sessions[token] = time.time() + _ADMIN_SESSION_TTL
-    # Purge expired sessions to keep memory tidy
-    expired = [k for k, exp in _admin_sessions.items() if time.time() > exp]
-    for k in expired:
-        del _admin_sessions[k]
-    return {"admin_session_token": token, "expires_in": _ADMIN_SESSION_TTL}
+    expires_at = time.time() + _ADMIN_SESSION_TTL
+    create_admin_session(token, expires_at)
+    purge_expired_admin_sessions()
+
+    _logger.info("ADMIN_LOGIN_SUCCESS username=%s", body.username)
+    return {
+        "admin_session_token": token,
+        "expires_in": _ADMIN_SESSION_TTL,
+        "expires_at": expires_at,
+    }
+
+
+@app.post("/admin/logout", tags=["Admin"])
+async def admin_logout(token: str = Depends(require_admin_session)):
+    """Invalidate the current admin session token immediately."""
+    delete_admin_session(token)
+    _logger.info("ADMIN_LOGOUT token_prefix=%s", token[:8])
+    return {"ok": True, "message": "Logged out successfully"}
+
+
+@app.get("/admin/session", tags=["Admin"])
+async def admin_session(token: str = Depends(require_admin_session)):
+    """Validate the current admin session. Returns 200 if valid, 401 if expired."""
+    return {"ok": True, "valid": True, "token_prefix": token[:8]}
 
 
 # ── Admin portal: protected endpoints ────────────────────────────────────────

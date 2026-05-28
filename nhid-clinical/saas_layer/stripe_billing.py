@@ -9,15 +9,18 @@ Uses stripe 15.x StripeClient v1 namespace:
     client.v1.checkout.sessions.create({...})
     client.v1.subscriptions.retrieve(id)
 """
+import logging
 import os
 import json
 import sqlite3
 import stripe
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from saas_layer.stripe_client import get_stripe_client, get_secret_key
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "..", "saas.db")
+_logger = logging.getLogger("nhid.saas.billing")
 
 PLAN_METADATA_KEY = "nhid_plan"
 
@@ -36,8 +39,12 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def migrate_billing_columns() -> None:
-    """Add Stripe columns to orgs table if they don't exist yet (idempotent)."""
+    """Add Stripe columns and idempotency table to saas.db (idempotent)."""
     conn = _get_conn()
     with conn:
         existing = {
@@ -52,6 +59,47 @@ def migrate_billing_columns() -> None:
             conn.execute(
                 "ALTER TABLE orgs ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
             )
+        # Idempotency table for webhook replay safety
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS processed_events (
+                event_id     TEXT PRIMARY KEY,
+                processed_at TEXT NOT NULL
+            )
+        """)
+        # Admin sessions persistence
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_sessions (
+                token      TEXT PRIMARY KEY,
+                expires_at REAL NOT NULL
+            )
+        """)
+    conn.close()
+
+
+# ── Idempotency helpers ────────────────────────────────────────────────────────
+
+def _is_processed(event_id: str) -> bool:
+    """Return True if this Stripe event_id was already handled."""
+    if not event_id:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM processed_events WHERE event_id = ?", (event_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def _mark_processed(event_id: str) -> None:
+    """Record a Stripe event_id as handled (idempotent INSERT OR IGNORE)."""
+    if not event_id:
+        return
+    conn = _get_conn()
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO processed_events (event_id, processed_at) VALUES (?, ?)",
+            (event_id, _now_iso()),
+        )
     conn.close()
 
 
@@ -142,11 +190,13 @@ def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
     """
     Verify and process a Stripe webhook. Returns {"handled": True, "event_type": ...}.
     Raises stripe.error.SignatureVerificationError on bad signature.
+    Idempotent: duplicate event_ids are silently skipped.
     """
     webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
     if webhook_secret:
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+        event_id = event.get("id", "")
         event_type = event["type"]
         data_object = event["data"]["object"]
     else:
@@ -156,8 +206,16 @@ def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
             stacklevel=2,
         )
         parsed = json.loads(payload)
+        event_id = parsed.get("id", "")
         event_type = parsed.get("type", "")
         data_object = parsed.get("data", {}).get("object", {})
+
+    _logger.info("STRIPE_WEBHOOK_RECEIVED event_type=%s event_id=%s", event_type, event_id)
+
+    # Idempotency: skip already-processed events (safe for Stripe retries)
+    if _is_processed(event_id):
+        _logger.info("STRIPE_WEBHOOK_DUPLICATE event_id=%s — skipped", event_id)
+        return {"handled": True, "event_type": event_type, "idempotent": True}
 
     if event_type == "checkout.session.completed":
         _handle_checkout_completed(data_object)
@@ -168,6 +226,7 @@ def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
     elif event_type == "customer.subscription.updated":
         _handle_subscription_updated(data_object)
 
+    _mark_processed(event_id)
     return {"handled": True, "event_type": event_type}
 
 
@@ -274,24 +333,32 @@ def _update_org_stripe(
     with conn:
         conn.execute(f"UPDATE orgs SET {', '.join(sets)} WHERE org_id = ?", vals)
     conn.close()
+    _logger.info(
+        "ORG_STATUS_UPDATED org_id=%s status=%s plan=%s",
+        org_id, status or "(unchanged)", plan or "(unchanged)",
+    )
 
 
 def check_subscription_gate(org: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Returns None if org is allowed through. Returns a 402 error dict if blocked.
-    Free orgs are always allowed (subject to usage limits in billing.py).
-    Paid orgs must have status=active.
+    Blocks ANY org with status != 'active' (free or paid).
+    Free orgs at 'active' status pass unconditionally (usage limits via billing.py).
     """
-    plan = org.get("plan", "free")
     status = org.get("status", "active")
-    if plan == "free":
-        return None
+    plan = org.get("plan", "free")
+    org_id = org.get("org_id", "?")
+
     if status != "active":
+        _logger.warning(
+            "BILLING_BLOCK_APPLIED org_id=%s plan=%s status=%s",
+            org_id, plan, status,
+        )
         return {
             "status_code": 402,
             "detail": (
-                f"Subscription inactive (status={status}). "
-                "Please update your payment method or resubscribe."
+                f"Account inactive (status={status}). "
+                "Please update your payment method or contact support."
             ),
         }
     return None

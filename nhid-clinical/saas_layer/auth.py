@@ -46,6 +46,18 @@ def init_db() -> None:
                 timestamp   TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_sessions (
+                token      TEXT PRIMARY KEY,
+                expires_at REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS processed_events (
+                event_id     TEXT PRIMARY KEY,
+                processed_at TEXT NOT NULL
+            )
+        """)
     conn.close()
 
     # Add billing columns to existing DBs (idempotent)
@@ -103,5 +115,53 @@ def increment_usage(org_id: str) -> None:
         conn.execute(
             "UPDATE orgs SET usage_count = usage_count + 1 WHERE org_id = ?",
             (org_id,),
+        )
+    conn.close()
+
+
+# ── Admin session management (SQLite-backed, survives restarts) ───────────────
+
+import time as _time  # local alias to avoid shadowing any outer `time`
+
+
+def create_admin_session(token: str, expires_at: float) -> None:
+    """Persist a new admin session token with its expiry timestamp."""
+    conn = _get_conn()
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO admin_sessions (token, expires_at) VALUES (?, ?)",
+            (token, expires_at),
+        )
+    conn.close()
+
+
+def validate_admin_session(token: str) -> bool:
+    """Return True if the token exists and has not expired."""
+    if not token:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT expires_at FROM admin_sessions WHERE token = ?", (token,)
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return False
+    return _time.time() <= row["expires_at"]
+
+
+def delete_admin_session(token: str) -> None:
+    """Remove a specific admin session (logout)."""
+    conn = _get_conn()
+    with conn:
+        conn.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
+    conn.close()
+
+
+def purge_expired_admin_sessions() -> None:
+    """Delete all expired sessions — call periodically to keep the table tidy."""
+    conn = _get_conn()
+    with conn:
+        conn.execute(
+            "DELETE FROM admin_sessions WHERE expires_at < ?", (_time.time(),)
         )
     conn.close()
