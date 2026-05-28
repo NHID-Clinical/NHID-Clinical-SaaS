@@ -47,3 +47,21 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+.replit
+replit.nix
+
+# Environment files — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# SQLite / database files
+*.db
+*.sqlite
+nhid_audit.db
+saas.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
