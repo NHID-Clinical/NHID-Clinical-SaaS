@@ -1,0 +1,10 @@
+{
+  "API_BASE_URL": "http://localhost:8001",
+  "environment": "development",
+  "feature_toggles": {
+    "READ_ONLY": true,
+    "ALLOW_WRITES": false,
+    "SHOW_RAW_SCHEMA": true,
+    "SHOW_PROOF_CHAIN": true
+  }
+}

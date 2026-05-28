@@ -20,6 +20,14 @@ author = "agent"
 task = "workflow.run"
 args = "NHID Audit Core"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "NHID Clinical Bridge"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "NHID Clinical Viewer"
+
 [[workflows.workflow]]
 name = "NHID Audit Core"
 author = "agent"
@@ -28,6 +36,30 @@ author = "agent"
 task = "shell.exec"
 args = "cd artifacts/nhid-audit-core && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
 waitForPort = 8000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow]]
+name = "NHID Clinical Bridge"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd nhid-clinical && uvicorn replit_backend_bridge:app --host 0.0.0.0 --port 8001 --reload"
+waitForPort = 8001
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "NHID Clinical Viewer"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd nhid-clinical/replit_dashboard && npm run dev"
+waitForPort = 5174
 
 [workflows.workflow.metadata]
 outputType = "webview"
@@ -42,10 +74,19 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
+packages = ["cargo", "libiconv", "libxcrypt", "openssl", "pkg-config", "rustc"]
+
+[[ports]]
+localPort = 5174
+externalPort = 3002
 
 [[ports]]
 localPort = 8000
 externalPort = 80
+
+[[ports]]
+localPort = 8001
+externalPort = 3000
 
 [[ports]]
 localPort = 8080
