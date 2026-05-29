@@ -1,0 +1,83 @@
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+Install the latest PowerShell for new features and improvements! https://aka.ms/PSWindows
+
+PS C:\Users\bnbay> cd C:\Users\bnbay\NHID-Clinical-test
+>> git remote -v
+>> git ls-files src tests
+>> git log --oneline -5
+>> dir NHID-Clinical
+origin  https://github.com/thankcheeses/NHID-Clinical.git (fetch)
+origin  https://github.com/thankcheeses/NHID-Clinical.git (push)
+src/agent_identity.py
+src/nhid_policy_engine_v1.py
+src/voice_policy.py
+tests/failure_injection_harness.py
+tests/nhid_conformance_test_suite_v1.yaml
+tests/test_identity.py
+tests/test_voice_policy.py
+tests/trace_generator.py
+829a328 (HEAD -> main, origin/main, origin/HEAD) Add voice policy conformance suite (47 tests)
+940ec56 Claude/code review fixes 98 ir1 (#182)
+b5ed8ca fix: remove duplicate Interoperability nav link and add to mobile menu (#181)
+a670d89 fix: remove duplicate Interoperability nav link and add to mobile menu (#180)
+523a6b1 fix: remove duplicate Interoperability nav link and add to mobile menu (#179)
+
+
+    Directory: C:\Users\bnbay\NHID-Clinical-test\NHID-Clinical
+
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d-----         5/29/2026   7:06 AM                .pytest_cache
+d-----         5/29/2026   7:06 AM                about
+d-----         5/29/2026   7:06 AM                adapters
+d-----         5/29/2026   7:06 AM                assets
+d-----         5/29/2026   7:06 AM                community
+d-----         5/29/2026   7:06 AM                conformance
+d-----         5/29/2026   7:06 AM                news
+d-----         5/29/2026   7:06 AM                schema
+d-----         5/29/2026   7:06 AM                simulator
+d-----         5/29/2026   7:06 AM                specs
+d-----         5/29/2026   7:06 AM                src
+d-----         5/29/2026   7:06 AM                tests
+d-----         5/29/2026   7:06 AM                traces
+-a----         5/29/2026   7:06 AM             44 .gitignore
+-a----         5/29/2026   7:06 AM           8760 about.html
+-a----         5/29/2026   7:06 AM          11090 app.py
+-a----         5/29/2026   7:06 AM             17 CNAME
+-a----         5/29/2026   7:06 AM             17 CODEOWNERS
+-a----         5/29/2026   7:06 AM          12281 community.html
+-a----         5/29/2026   7:06 AM            397 conformance.html
+-a----         5/29/2026   7:06 AM          17205 developers.html
+-a----         5/29/2026   7:06 AM          13410 faq.html
+-a----         5/29/2026   7:06 AM          20285 for-payers.html
+-a----         5/29/2026   7:06 AM              2 google8816d7b1d7cd1d36.html
+-a----         5/29/2026   7:06 AM          64771 gov-sim.html
+-a----         5/29/2026   7:06 AM            392 governance-simulator.html
+-a----         5/29/2026   7:06 AM           8362 implementation-review.html
+-a----         5/29/2026   7:06 AM          17906 index.html
+-a----         5/29/2026   7:06 AM          17937 interoperability.html
+-a----         5/29/2026   7:06 AM          19094 LICENSE
+-a----         5/29/2026   7:06 AM            615 llm.py
+-a----         5/29/2026   7:06 AM          10029 news.html
+-a----         5/29/2026   7:06 AM          68072 nhid-clinical-ui.css
+-a----         5/29/2026   7:06 AM           9062 nhid-workflow.svg
+-a----         5/29/2026   7:06 AM           1321 nhid_engine.py
+-a----         5/29/2026   7:06 AM          12509 nhid_event_store.py
+-a----         5/29/2026   7:06 AM           4246 nhid_policy.py
+-a----         5/29/2026   7:06 AM          21803 proof.html
+-a----         5/29/2026   7:06 AM             72 pytest.ini
+-a----         5/29/2026   7:06 AM           2822 README.md
+-a----         5/29/2026   7:06 AM            188 requirements.txt
+-a----         5/29/2026   7:06 AM          17068 roadmap.html
+-a----         5/29/2026   7:06 AM          16874 script-examples.html
+-a----         5/29/2026   7:06 AM          70826 simulator.html
+-a----         5/29/2026   7:06 AM           8908 site.js
+-a----         5/29/2026   7:06 AM          15393 specification.html
+-a----         5/29/2026   7:06 AM           8672 test_runner.py
+-a----         5/29/2026   7:06 AM            341 twilio_helper.py
+
+
+PS C:\Users\bnbay\NHID-Clinical-test>
