@@ -19,6 +19,7 @@ import os
 import sys
 import uuid
 import time
+import threading
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,9 +56,16 @@ from saas_layer.stripe_billing import (
 )
 from saas_layer.stripe_client import get_publishable_key
 from saas_layer import audit as audit_svc
+from saas_layer.voice_policy import run_voice_policy
 
 # NHID core is accessed via direct Python import (no Bridge HTTP dependency).
 from saas_layer import nhid_client
+
+# ── Voice session state ────────────────────────────────────────────────────────
+# In-memory per-call state keyed by session_id.
+# Not persisted — lives for the duration of the process.
+_voice_sessions: Dict[str, Dict] = {}
+_voice_lock = threading.Lock()
 
 _ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
 
@@ -629,6 +637,145 @@ async def audit_proof(session_id: str, org: Dict = Depends(subscription_gated_or
         "event_count": result["event_count"],
         "breaks": result["breaks"],
         "events": result["events"],
+    }
+
+
+# ── Voice: incoming call + transcript enforcement ─────────────────────────────
+
+class VoiceIncomingRequest(BaseModel):
+    caller_id: Optional[str] = None
+    org_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class VoiceTranscriptRequest(BaseModel):
+    session_id: str
+    transcript_text: str
+    turn_number: int = 1
+
+
+@app.post("/saas/voice/incoming", tags=["Voice"])
+async def voice_incoming(body: VoiceIncomingRequest, org: Dict = Depends(get_current_org)):
+    """
+    Register an inbound voice call.
+    Creates a session, appends a voice_session_start audit event,
+    and returns the required opening disclosure script.
+    """
+    session_id = str(uuid.uuid4())
+    with _voice_lock:
+        _voice_sessions[session_id] = {
+            "disclosure_confirmed": False,
+            "escalated": False,
+            "org_id": org["org_id"],
+        }
+
+    event = {
+        "event_type": "voice_session_start",
+        "state_before": "idle",
+        "state_after": "active",
+        "input_text": body.caller_id,
+        "policy_action": "disclose",
+        "reason_code": "REQUIRE_UPFRONT_DISCLOSURE",
+        "response_text": None,
+        "policy_version": "VOICE-POLICY-v1.0",
+    }
+    try:
+        nhid_client.append_event(session_id, [event], f"voice:start:{session_id}")
+    except nhid_client.NHIDClientError as exc:
+        _logger.warning("voice_incoming nhid append skipped: %s", exc)
+
+    try:
+        audit_svc.append_trace(org_id=org["org_id"], session_id=session_id, event=event)
+    except Exception as exc:
+        _logger.error("voice_incoming audit_svc.append_trace FAILED org=%s session=%s: %s",
+                      org["org_id"], session_id, exc)
+        with _voice_lock:
+            _voice_sessions.pop(session_id, None)
+        raise HTTPException(
+            status_code=500,
+            detail="Audit trace write failed. Voice session was not recorded in the tamper-evident log.",
+        )
+
+    log_request(org["org_id"], "/saas/voice/incoming", "POST", 200, session_id)
+    disclosure_text = (
+        f"This call is handled by an AI system operating on behalf of {org['org_name']}. "
+        "You may request a human agent at any time."
+    )
+    return {
+        "session_id": session_id,
+        "action": "disclose",
+        "disclosure_text": disclosure_text,
+    }
+
+
+@app.post("/saas/voice/transcript", tags=["Voice"])
+async def voice_transcript(body: VoiceTranscriptRequest, org: Dict = Depends(get_current_org)):
+    """
+    Process a transcript chunk through the voice policy engine.
+    Appends the enforcement decision to the tamper-evident audit trail.
+    Returns action, reason_code, session_id, and event_hash.
+    """
+    with _voice_lock:
+        session_state = _voice_sessions.get(body.session_id)
+        if session_state is None:
+            raise HTTPException(status_code=404, detail=f"Voice session '{body.session_id}' not found.")
+        if session_state.get("org_id") != org["org_id"]:
+            raise HTTPException(status_code=403, detail="Voice session does not belong to your organisation.")
+        state_snapshot = dict(session_state)
+
+    decision = run_voice_policy(body.transcript_text, state_snapshot)
+    action = decision["action"]
+    reason_code = decision["reason_code"]
+    policy_version = decision["policy_version"]
+
+    event = {
+        "event_type": "voice_transcript",
+        "state_before": "active",
+        "state_after": "escalated" if action == "escalate" else "active",
+        "input_text": body.transcript_text[:500],
+        "policy_action": action,
+        "reason_code": reason_code,
+        "response_text": None,
+        "policy_version": policy_version,
+    }
+
+    try:
+        nhid_client.append_event(
+            body.session_id, [event],
+            f"voice:transcript:{body.session_id}:{body.turn_number}",
+        )
+    except nhid_client.NHIDClientError as exc:
+        _logger.warning("voice_transcript nhid append skipped: %s", exc)
+
+    try:
+        result = audit_svc.append_trace(
+            org_id=org["org_id"],
+            session_id=body.session_id,
+            event=event,
+        )
+        event_hash = result.get("event_hash", "")
+    except Exception as exc:
+        _logger.error("voice_transcript audit_svc.append_trace FAILED org=%s session=%s: %s",
+                      org["org_id"], body.session_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Audit trace write failed. Enforcement decision was not recorded in the tamper-evident log.",
+        )
+
+    with _voice_lock:
+        if body.session_id in _voice_sessions:
+            if action in ("allow", "disclose"):
+                _voice_sessions[body.session_id]["disclosure_confirmed"] = True
+            elif action == "escalate":
+                _voice_sessions[body.session_id]["disclosure_confirmed"] = True
+                _voice_sessions[body.session_id]["escalated"] = True
+
+    log_request(org["org_id"], "/saas/voice/transcript", "POST", 200, body.session_id)
+    return {
+        "action": action,
+        "reason_code": reason_code,
+        "session_id": body.session_id,
+        "event_hash": event_hash,
     }
 
 

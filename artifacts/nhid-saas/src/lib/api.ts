@@ -179,6 +179,19 @@ async function req<T>(
   return res.json() as Promise<T>;
 }
 
+export interface VoiceIncomingResult {
+  session_id: string;
+  action: "disclose";
+  disclosure_text: string;
+}
+
+export interface VoiceTranscriptResult {
+  action: "allow" | "disclose" | "escalate" | "block";
+  reason_code: string | null;
+  session_id: string;
+  event_hash: string;
+}
+
 export const api = {
   /** Check if the gateway is reachable. */
   health: () => req<{ ok: boolean; service: string }>("/saas/health"),
@@ -262,6 +275,28 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ plan, success_url: successUrl, cancel_url: cancelUrl }),
       },
+      apiKey,
+    ),
+
+  /** Register an inbound voice call and get the opening disclosure. */
+  voiceIncoming: (
+    apiKey: string,
+    payload: { caller_id?: string; metadata?: Record<string, unknown> },
+  ): Promise<VoiceIncomingResult> =>
+    req<VoiceIncomingResult>(
+      "/saas/voice/incoming",
+      { method: "POST", body: JSON.stringify(payload) },
+      apiKey,
+    ),
+
+  /** Process a transcript chunk through the voice policy engine. */
+  voiceTranscript: (
+    apiKey: string,
+    payload: { session_id: string; transcript_text: string; turn_number: number },
+  ): Promise<VoiceTranscriptResult> =>
+    req<VoiceTranscriptResult>(
+      "/saas/voice/transcript",
+      { method: "POST", body: JSON.stringify(payload) },
       apiKey,
     ),
 };

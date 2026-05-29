@@ -1,9 +1,9 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import {
   Shield, CheckCircle, XCircle, Copy, Check, ArrowRight,
   Zap, RefreshCw, ChevronDown, ChevronRight, ExternalLink,
-  AlertTriangle, Layers, Lock,
+  AlertTriangle, Layers, Lock, Phone, User, Bot,
 } from "lucide-react";
 
 const SAAS = "/saas-api/saas";
@@ -136,6 +136,24 @@ const PRESETS = [
 ] as const;
 
 type PresetId = typeof PRESETS[number]["id"];
+
+// ── Scripted call turns ────────────────────────────────────────────────────────
+
+const VOICE_TURNS = [
+  { text: "Hello, I need help understanding my discharge instructions.", label: "Opening" },
+  { text: "Can you explain what medications I should take?", label: "Inquiry" },
+  { text: "What are the side effects of the prescribed medication?", label: "Follow-up" },
+  { text: "I want to speak to a real person about this.", label: "Escalation trigger" },
+  { text: "Thank you for your help today.", label: "Closing" },
+] as const;
+
+type VoiceTurnResult = {
+  text: string;
+  label: string;
+  action: "allow" | "disclose" | "escalate" | "block";
+  reason_code: string | null;
+  event_hash: string;
+};
 
 // ── Small components ───────────────────────────────────────────────────────────
 
@@ -444,6 +462,98 @@ export default function TryPage() {
       setVerifying(false);
     }
   }, [org, sessionId]);
+
+  // ── Voice demo state
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voiceRunning, setVoiceRunning] = useState(false);
+  const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
+  const [voiceDisclosure, setVoiceDisclosure] = useState<string | null>(null);
+  const [voiceTurns, setVoiceTurns] = useState<VoiceTurnResult[]>([]);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceProofOpen, setVoiceProofOpen] = useState(false);
+  const [voiceProof, setVoiceProof] = useState<ProofData | null>(null);
+  const [voiceProofLoading, setVoiceProofLoading] = useState(false);
+  const voiceAbort = useRef(false);
+
+  const startVoiceCall = useCallback(async () => {
+    if (!org) return;
+    voiceAbort.current = false;
+    setVoiceRunning(true);
+    setVoiceError(null);
+    setVoiceTurns([]);
+    setVoiceSessionId(null);
+    setVoiceDisclosure(null);
+    setVoiceProof(null);
+    setVoiceProofOpen(false);
+
+    try {
+      // Step 1: register the call
+      const inRes = await fetch(`${SAAS}/voice/incoming`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": org.api_key },
+        body: JSON.stringify({ caller_id: "demo-caller-001" }),
+      });
+      if (!inRes.ok) {
+        const b = await inRes.json().catch(() => ({}));
+        throw new Error(b.detail || `Error ${inRes.status}`);
+      }
+      const inData = await inRes.json();
+      const sid: string = inData.session_id;
+      setVoiceSessionId(sid);
+      setVoiceDisclosure(inData.disclosure_text);
+
+      // Step 2: play through each scripted turn with 800ms gaps
+      for (let i = 0; i < VOICE_TURNS.length; i++) {
+        if (voiceAbort.current) break;
+        await new Promise(r => setTimeout(r, 800));
+        if (voiceAbort.current) break;
+
+        const turn = VOICE_TURNS[i];
+        const txRes = await fetch(`${SAAS}/voice/transcript`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": org.api_key },
+          body: JSON.stringify({ session_id: sid, transcript_text: turn.text, turn_number: i + 1 }),
+        });
+        if (!txRes.ok) {
+          const b = await txRes.json().catch(() => ({}));
+          throw new Error(b.detail || `Error ${txRes.status}`);
+        }
+        const txData = await txRes.json();
+        setVoiceTurns(prev => [...prev, {
+          text: turn.text,
+          label: turn.label,
+          action: txData.action,
+          reason_code: txData.reason_code,
+          event_hash: txData.event_hash,
+        }]);
+      }
+    } catch (e: any) {
+      setVoiceError(e.message || "Voice simulation failed");
+    } finally {
+      setVoiceRunning(false);
+    }
+  }, [org]);
+
+  const loadVoiceProof = useCallback(async () => {
+    if (!org || !voiceSessionId) return;
+    setVoiceProofLoading(true);
+    try {
+      const res = await fetch(`${SAAS}/audit/proof/${encodeURIComponent(voiceSessionId)}`, {
+        headers: { "X-API-Key": org.api_key },
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.detail || `Error ${res.status}`);
+      }
+      const data: ProofData = await res.json();
+      setVoiceProof(data);
+      setVoiceProofOpen(true);
+    } catch (e: any) {
+      setVoiceError(e.message || "Failed to load proof");
+    } finally {
+      setVoiceProofLoading(false);
+    }
+  }, [org, voiceSessionId]);
 
   const resetSession = () => {
     setSessionId(genSessionId());
@@ -904,6 +1014,211 @@ export default function TryPage() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ── Voice Simulation card */}
+        {org && (
+          <div style={{ ...card(), marginBottom: 16, overflow: "hidden" }}>
+            {/* Header / toggle */}
+            <button
+              onClick={() => setVoiceOpen(o => !o)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", gap: 12,
+                padding: "18px 22px", background: "none", border: "none", cursor: "pointer",
+                textAlign: "left", fontFamily: "'Raleway', sans-serif",
+              }}
+            >
+              <div style={{
+                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                background: voiceTurns.length > 0 ? "rgba(0,194,168,0.2)" : "rgba(255,255,255,0.07)",
+                border: `1px solid ${voiceTurns.length > 0 ? "rgba(0,194,168,0.4)" : "rgba(255,255,255,0.12)"}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <Phone size={13} color={voiceTurns.length > 0 ? "#00c2a8" : "#64748b"} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)" }}>
+                  Simulate Voice Call
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                  6-turn scripted call with real-time policy enforcement logged to the audit trail
+                </div>
+              </div>
+              {voiceOpen
+                ? <ChevronDown size={16} color="#475569" />
+                : <ChevronRight size={16} color="#475569" />
+              }
+            </button>
+
+            {voiceOpen && (
+              <div style={{ padding: "0 22px 22px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                {/* Disclosure banner (shown after call starts) */}
+                {voiceDisclosure && (
+                  <div style={{
+                    margin: "16px 0 12px", padding: "12px 14px", borderRadius: 10,
+                    background: "rgba(251,189,36,0.08)", border: "1px solid rgba(251,189,36,0.25)",
+                    display: "flex", gap: 10, alignItems: "flex-start",
+                  }}>
+                    <Bot size={14} color="#fbbd24" style={{ flexShrink: 0, marginTop: 1 }} />
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#fbbd24", letterSpacing: "0.08em", marginBottom: 4 }}>
+                        AI DISCLOSURE · auto-played on call open
+                      </div>
+                      <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6 }}>
+                        "{voiceDisclosure}"
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Turn bubbles */}
+                {voiceTurns.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+                    {voiceTurns.map((turn, i) => {
+                      const actionColor =
+                        turn.action === "allow" ? "#00c2a8" :
+                        turn.action === "escalate" ? "#ef4444" :
+                        turn.action === "disclose" ? "#fbbd24" : "#94a3b8";
+                      const actionBg =
+                        turn.action === "allow" ? "rgba(0,194,168,0.08)" :
+                        turn.action === "escalate" ? "rgba(239,68,68,0.08)" :
+                        turn.action === "disclose" ? "rgba(251,189,36,0.08)" : "rgba(148,163,184,0.08)";
+                      return (
+                        <div
+                          key={i}
+                          style={{
+                            display: "flex", alignItems: "flex-start", gap: 10,
+                            animation: "slideIn 0.3s ease",
+                          }}
+                        >
+                          {/* Caller bubble */}
+                          <div style={{ flexShrink: 0 }}>
+                            <User size={13} color="#64748b" style={{ marginTop: 3 }} />
+                          </div>
+                          <div style={{
+                            flex: 1, padding: "10px 13px", borderRadius: 10,
+                            background: "rgba(255,255,255,0.04)",
+                            border: "1px solid rgba(255,255,255,0.07)",
+                          }}>
+                            <div style={{ fontSize: 10, color: "#475569", fontWeight: 700, marginBottom: 4, letterSpacing: "0.06em" }}>
+                              {turn.label.toUpperCase()} · Turn {i + 1}
+                            </div>
+                            <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.5 }}>
+                              "{turn.text}"
+                            </div>
+                            {turn.event_hash && (
+                              <div style={{ marginTop: 6, fontSize: 9, color: "#334155", fontFamily: "monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                                <span style={{ color: "#475569" }}>hash</span>
+                                <code style={{ color: "#53d8fb" }}>{turn.event_hash.slice(0, 16)}…</code>
+                                <CopyBtn value={turn.event_hash} size={9} />
+                              </div>
+                            )}
+                          </div>
+                          {/* Policy action badge */}
+                          <span style={{
+                            flexShrink: 0, padding: "4px 10px", borderRadius: 99, fontSize: 10, fontWeight: 800,
+                            background: actionBg, color: actionColor,
+                            border: `1px solid ${actionColor}30`,
+                            letterSpacing: "0.06em", marginTop: 2,
+                            textTransform: "uppercase",
+                          }}>
+                            {turn.action}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Summary box after escalation */}
+                {!voiceRunning && voiceTurns.some(t => t.action === "escalate") && (
+                  <div style={{
+                    marginBottom: 16, padding: "14px 16px", borderRadius: 10,
+                    background: "rgba(0,194,168,0.06)", border: "1px solid rgba(0,194,168,0.2)",
+                    display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+                  }}>
+                    <CheckCircle size={16} color="#00c2a8" style={{ flexShrink: 0 }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>
+                        {voiceTurns.length} policy decision{voiceTurns.length !== 1 ? "s" : ""} logged · Chain verified
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 3, fontFamily: "monospace" }}>
+                        Session: {voiceSessionId}
+                      </div>
+                    </div>
+                    <button
+                      onClick={loadVoiceProof}
+                      disabled={voiceProofLoading}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 7,
+                        padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+                        background: "rgba(83,216,251,0.1)", border: "1px solid rgba(83,216,251,0.3)",
+                        color: "#53d8fb", cursor: voiceProofLoading ? "not-allowed" : "pointer",
+                        fontFamily: "'Raleway', sans-serif",
+                      }}
+                    >
+                      {voiceProofLoading
+                        ? <RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} />
+                        : <Layers size={12} />
+                      }
+                      View Full Proof
+                    </button>
+                  </div>
+                )}
+
+                {/* Proof viewer for voice session */}
+                {voiceProof && voiceProofOpen && (
+                  <div style={{ marginBottom: 16 }}>
+                    <button
+                      onClick={() => setVoiceProofOpen(o => !o)}
+                      style={{
+                        background: "none", border: "none", cursor: "pointer",
+                        display: "flex", alignItems: "center", gap: 6,
+                        fontSize: 11, fontWeight: 700, color: "#64748b",
+                        padding: "4px 0", marginBottom: 10,
+                        fontFamily: "'Raleway', sans-serif",
+                      }}
+                    >
+                      <ChevronDown size={13} />
+                      Voice audit trail — {voiceProof.event_count} event{voiceProof.event_count !== 1 ? "s" : ""}
+                    </button>
+                    <ProofViewer proof={voiceProof} />
+                  </div>
+                )}
+
+                {voiceError && (
+                  <div style={{ marginBottom: 12, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <AlertTriangle size={13} color="#ef4444" style={{ flexShrink: 0, marginTop: 2 }} />
+                    <span style={{ fontSize: 12, color: "#fca5a5" }}>{voiceError}</span>
+                  </div>
+                )}
+
+                {/* Start button */}
+                <button
+                  onClick={startVoiceCall}
+                  disabled={voiceRunning}
+                  style={{
+                    width: "100%", padding: "13px", borderRadius: 10, fontSize: 14, fontWeight: 800,
+                    background: voiceRunning
+                      ? "rgba(0,194,168,0.3)"
+                      : "linear-gradient(135deg, #00c2a8, #53d8fb)",
+                    border: "none", color: "#070c17",
+                    cursor: voiceRunning ? "not-allowed" : "pointer",
+                    fontFamily: "'Raleway', sans-serif",
+                    boxShadow: voiceRunning ? "none" : "0 0 28px rgba(0,194,168,0.3)",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 9,
+                    transition: "all 0.2s",
+                  }}
+                >
+                  {voiceRunning
+                    ? <RefreshCw size={15} style={{ animation: "spin 1s linear infinite" }} />
+                    : <Phone size={15} />
+                  }
+                  {voiceRunning ? "Running call simulation…" : "Start Simulated Call"}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
