@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Shield, LogOut, RefreshCw, Eye, EyeOff, Users, Activity, AlertCircle, Lock } from "lucide-react";
+import { Shield, LogOut, RefreshCw, Eye, EyeOff, Users, Activity, AlertCircle, Lock, PhoneCall } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -33,6 +33,14 @@ interface ActivityRow {
   status_code: number | null;
   session_id: string | null;
   timestamp: string;
+}
+
+interface VoiceSession {
+  session_id: string;
+  org_id: string;
+  disclosure_confirmed: boolean;
+  escalated: boolean;
+  created_at: string;
 }
 
 // ── Admin API ─────────────────────────────────────────────────────────────────
@@ -328,23 +336,29 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
   const [orgs, setOrgs] = useState<AdminOrg[]>([]);
   const [stats, setStats] = useState<GlobalStats | null>(null);
   const [activity, setActivity] = useState<ActivityRow[]>([]);
+  const [voiceSessions, setVoiceSessions] = useState<VoiceSession[]>([]);
+  const [voiceEscalatedCount, setVoiceEscalatedCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
-  const [tab, setTab] = useState<"orgs" | "activity">("orgs");
+  const [tab, setTab] = useState<"orgs" | "activity" | "voice">("orgs");
   const [search, setSearch] = useState("");
+  const [voiceOrgFilter, setVoiceOrgFilter] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [orgsData, usageData] = await Promise.all([
+      const [orgsData, usageData, voiceData] = await Promise.all([
         adminFetch<{ orgs: AdminOrg[]; global_stats: GlobalStats }>("/orgs", token),
         adminFetch<{ recent_activity: ActivityRow[]; global_stats: GlobalStats }>("/usage", token),
+        adminFetch<{ sessions: VoiceSession[]; total: number; escalated_count: number }>("/voice/sessions", token),
       ]);
       setOrgs(orgsData.orgs);
       setStats(orgsData.global_stats);
       setActivity(usageData.recent_activity);
+      setVoiceSessions(voiceData.sessions);
+      setVoiceEscalatedCount(voiceData.escalated_count);
     } catch (err: any) {
       if (err.message?.startsWith("401:")) {
         onLogout();
@@ -493,10 +507,14 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 0, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 22 }}>
-          {([["orgs", "Organisations", orgs.length], ["activity", "Recent Activity", activity.length]] as const).map(([id, label, count]) => (
+          {([
+            ["orgs", "Organisations", orgs.length, <Users size={13} />],
+            ["activity", "Recent Activity", activity.length, <Activity size={13} />],
+            ["voice", "Voice Sessions", voiceSessions.length, <PhoneCall size={13} />],
+          ] as [string, string, number, React.ReactNode][]).map(([id, label, count, icon]) => (
             <button
               key={id}
-              onClick={() => setTab(id as "orgs" | "activity")}
+              onClick={() => setTab(id as "orgs" | "activity" | "voice")}
               style={{
                 display: "flex", alignItems: "center", gap: 7,
                 padding: "10px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer",
@@ -507,8 +525,17 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                 transition: "color 0.15s",
               }}
             >
-              {id === "orgs" ? <Users size={13} /> : <Activity size={13} />}
+              {icon}
               {label}
+              {id === "voice" && voiceEscalatedCount > 0 && (
+                <span style={{
+                  fontSize: 10, padding: "1px 6px", borderRadius: 10, fontWeight: 700,
+                  background: "rgba(239,68,68,0.15)", color: "#f87171",
+                  border: "1px solid rgba(239,68,68,0.25)",
+                }}>
+                  {voiceEscalatedCount} escalated
+                </span>
+              )}
               <span
                 style={{
                   fontSize: 10, padding: "1px 6px", borderRadius: 10, fontWeight: 700,
@@ -636,6 +663,132 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
             )}
           </div>
         )}
+
+        {/* Voice Sessions filter */}
+        {tab === "voice" && (
+          <div style={{ marginBottom: 14 }}>
+            <input
+              value={voiceOrgFilter}
+              onChange={e => setVoiceOrgFilter(e.target.value)}
+              placeholder="Filter by org ID…"
+              style={{
+                width: "100%", maxWidth: 360, padding: "9px 14px", borderRadius: 8,
+                background: "rgba(255,255,255,0.04)", border: "1px solid rgba(0,194,168,0.12)",
+                color: "#e0e8f4", fontSize: 13, outline: "none",
+                fontFamily: "'Raleway', sans-serif",
+              }}
+              onFocus={e => e.target.style.borderColor = "rgba(0,194,168,0.35)"}
+              onBlur={e => e.target.style.borderColor = "rgba(0,194,168,0.12)"}
+            />
+          </div>
+        )}
+
+        {/* Voice Sessions Table */}
+        {tab === "voice" && (() => {
+          const filtered = voiceOrgFilter.trim()
+            ? voiceSessions.filter(s => s.org_id.toLowerCase().includes(voiceOrgFilter.trim().toLowerCase()))
+            : voiceSessions;
+          return (
+            <div style={{
+              background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,194,168,0.1)",
+              borderRadius: 12, overflow: "hidden",
+            }}>
+              <div style={{
+                padding: "14px 20px", borderBottom: "1px solid rgba(255,255,255,0.05)",
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+              }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, color: "#e0e8f4" }}>
+                  <PhoneCall size={15} style={{ color: "#00c2a8" }} /> Voice Sessions
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  {voiceEscalatedCount > 0 && (
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 8,
+                      background: "rgba(239,68,68,0.1)", color: "#f87171",
+                      border: "1px solid rgba(239,68,68,0.25)",
+                    }}>
+                      {voiceEscalatedCount} need handoff
+                    </span>
+                  )}
+                  <span style={{ color: "#7a8fa8", fontSize: 12 }}>
+                    {filtered.length}{filtered.length !== voiceSessions.length ? ` of ${voiceSessions.length}` : ""} sessions
+                  </span>
+                </div>
+              </div>
+              {loading ? (
+                <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>Loading…</div>
+              ) : filtered.length === 0 ? (
+                <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>
+                  {voiceOrgFilter ? "No sessions match that org ID." : "No voice sessions recorded yet."}
+                </div>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ background: "rgba(0,0,0,0.15)" }}>
+                        <th style={tableHd}>Session ID</th>
+                        <th style={tableHd}>Org</th>
+                        <th style={tableHd}>Disclosure</th>
+                        <th style={tableHd}>Escalated</th>
+                        <th style={tableHd}>Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((s) => (
+                        <tr
+                          key={s.session_id}
+                          style={{
+                            transition: "background 0.1s",
+                            background: s.escalated ? "rgba(239,68,68,0.04)" : undefined,
+                            borderLeft: s.escalated ? "3px solid rgba(239,68,68,0.5)" : "3px solid transparent",
+                          }}
+                        >
+                          <td style={{ ...tableTd, ...mono, color: "#e0e8f4" }}>
+                            {s.session_id.slice(0, 8)}…{s.session_id.slice(-4)}
+                          </td>
+                          <td style={{ ...tableTd, ...mono, color: "#7a8fa8" }}>
+                            {s.org_id.slice(0, 8)}…
+                          </td>
+                          <td style={tableTd}>
+                            <span style={{
+                              display: "inline-flex", alignItems: "center", gap: 5,
+                              fontSize: 11, fontWeight: 700,
+                              color: s.disclosure_confirmed ? "#3fb950" : "#fbbd24",
+                            }}>
+                              <span style={{
+                                width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                                background: s.disclosure_confirmed ? "#3fb950" : "#fbbd24",
+                                boxShadow: `0 0 5px ${s.disclosure_confirmed ? "#3fb95080" : "#fbbd2480"}`,
+                              }} />
+                              {s.disclosure_confirmed ? "Confirmed" : "Pending"}
+                            </span>
+                          </td>
+                          <td style={tableTd}>
+                            {s.escalated ? (
+                              <span style={{
+                                display: "inline-flex", alignItems: "center", gap: 5,
+                                fontSize: 11, fontWeight: 800, color: "#f87171",
+                                background: "rgba(239,68,68,0.1)", borderRadius: 6,
+                                padding: "3px 8px", border: "1px solid rgba(239,68,68,0.3)",
+                              }}>
+                                ⚠ Escalated
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: 11, color: "#7a8fa8" }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ ...tableTd, color: "#7a8fa8", fontSize: 11, whiteSpace: "nowrap" }}>
+                            {fmt(s.created_at)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Activity Table */}
         {tab === "activity" && (

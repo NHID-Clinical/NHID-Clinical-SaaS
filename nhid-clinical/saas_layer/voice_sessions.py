@@ -90,6 +90,48 @@ def update_voice_session_in_tx(
     )
 
 
+def list_voice_sessions(
+    org_id: Optional[str] = None,
+    limit: int = 100,
+) -> list:
+    """
+    Return recent voice_sessions rows ordered by created_at DESC.
+
+    If *org_id* is given, only rows for that organisation are returned.
+    *limit* caps the result set (max 500 to prevent runaway queries).
+    """
+    limit = min(max(1, limit), 500)
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            if org_id:
+                cur.execute(
+                    """
+                    SELECT session_id, org_id, disclosure_confirmed, escalated, created_at
+                    FROM voice_sessions
+                    WHERE org_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (org_id, limit),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT session_id, org_id, disclosure_confirmed, escalated, created_at
+                    FROM voice_sessions
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def delete_voice_session(session_id: str) -> None:
     """
     Delete a voice session row.  Used for failure compensation in voice_incoming

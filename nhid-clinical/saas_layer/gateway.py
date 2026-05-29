@@ -64,6 +64,7 @@ from saas_layer.voice_sessions import (
     create_voice_session,
     delete_voice_session,
     get_voice_session_for_update,
+    list_voice_sessions,
     purge_old_sessions,
     update_voice_session_in_tx,
 )
@@ -1362,6 +1363,29 @@ async def admin_portal_usage(_token: str = Depends(require_admin_session)):
     return {
         "global_stats": stats,
         "recent_activity": activity,
+    }
+
+
+@app.get("/admin/voice/sessions", tags=["Admin"])
+async def admin_voice_sessions(
+    org_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    _token: str = Depends(require_admin_session),
+):
+    """
+    List recent voice sessions with their policy state.
+
+    Optionally filter by org_id.  Escalated sessions are flagged so operators
+    can prioritise human handoff.  Returns up to *limit* rows (max 500),
+    ordered newest-first.
+    """
+    sessions = list_voice_sessions(org_id=org_id or None, limit=limit)
+    escalated_count = sum(1 for s in sessions if s.get("escalated"))
+    return {
+        "sessions": sessions,
+        "total": len(sessions),
+        "escalated_count": escalated_count,
+        "filter_org_id": org_id or None,
     }
 
 
