@@ -6,8 +6,7 @@ import {
   AlertTriangle, Layers, Lock,
 } from "lucide-react";
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
-const SAAS = `${BASE}/saas-api/saas`;
+const SAAS = "/saas-api/saas";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
