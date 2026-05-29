@@ -36,7 +36,7 @@ from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 
 from saas_layer.auth import (
     init_db, create_org, validate_api_key, get_org,
@@ -57,6 +57,7 @@ from saas_layer.stripe_billing import (
 from saas_layer.stripe_client import get_publishable_key
 from saas_layer import audit as audit_svc
 from saas_layer.voice_policy import run_voice_policy
+from saas_layer import voice_policy_store
 
 # NHID core is accessed via direct Python import (no Bridge HTTP dependency).
 from saas_layer import nhid_client
@@ -112,6 +113,7 @@ async def _strip_path_prefix(request: Request, call_next):
 
 init_db()
 migrate_billing_columns()
+voice_policy_store.init_voice_policy_table()
 
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
@@ -723,7 +725,13 @@ async def voice_transcript(body: VoiceTranscriptRequest, org: Dict = Depends(get
             raise HTTPException(status_code=403, detail="Voice session does not belong to your organisation.")
         state_snapshot = dict(session_state)
 
-    decision = run_voice_policy(body.transcript_text, state_snapshot)
+    org_policy = voice_policy_store.get_effective_policy(org["org_id"])
+    decision = run_voice_policy(
+        body.transcript_text,
+        state_snapshot,
+        phrases=org_policy["phrases"],
+        policy_version=org_policy["version"],
+    )
     action = decision["action"]
     reason_code = decision["reason_code"]
     policy_version = decision["policy_version"]
@@ -777,6 +785,50 @@ async def voice_transcript(body: VoiceTranscriptRequest, org: Dict = Depends(get
         "session_id": body.session_id,
         "event_hash": event_hash,
     }
+
+
+@app.get("/saas/voice/policy", tags=["Voice"])
+async def get_voice_policy(org: Dict = Depends(get_current_org)):
+    """
+    Return the org's current voice policy configuration.
+    If no custom config has been saved, returns the system defaults.
+    Also includes the last 10 saved versions for display in the dashboard.
+    """
+    effective = voice_policy_store.get_effective_policy(org["org_id"])
+    history = voice_policy_store.get_policy_history(org["org_id"], limit=10)
+    return {
+        "org_id": org["org_id"],
+        "phrases": effective["phrases"],
+        "version": effective["version"],
+        "is_custom": effective["is_custom"],
+        "created_at": effective.get("created_at"),
+        "history": history,
+    }
+
+
+class VoicePolicyUpdateBody(BaseModel):
+    phrases: List[str]
+
+
+@app.put("/saas/voice/policy", tags=["Voice"])
+async def update_voice_policy(
+    body: VoicePolicyUpdateBody,
+    org: Dict = Depends(get_current_org),
+):
+    """
+    Save a new set of escalation trigger phrases for the org.
+    Each save creates an append-only version row for audit purposes.
+    Returns the newly active policy.
+    """
+    phrases = [p.strip().lower() for p in body.phrases if p.strip()]
+    if not phrases:
+        raise HTTPException(status_code=422, detail="phrases must be a non-empty list of strings.")
+    if len(phrases) > 100:
+        raise HTTPException(status_code=422, detail="Maximum 100 trigger phrases allowed.")
+
+    saved = voice_policy_store.save_policy(org["org_id"], phrases)
+    log_request(org["org_id"], "/saas/voice/policy", "PUT", 200, None)
+    return saved
 
 
 # ── Usage: stats + activity ───────────────────────────────────────────────────

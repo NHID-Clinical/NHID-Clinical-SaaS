@@ -192,6 +192,29 @@ export interface VoiceTranscriptResult {
   event_hash: string;
 }
 
+export interface VoicePolicyHistoryEntry {
+  id: number;
+  phrases: string[];
+  version: string;
+  created_at: string;
+}
+
+export interface VoicePolicyConfig {
+  org_id: string;
+  phrases: string[];
+  version: string;
+  is_custom: boolean;
+  created_at: string | null;
+  history: VoicePolicyHistoryEntry[];
+}
+
+export interface VoicePolicySaveResult {
+  phrases: string[];
+  version: string;
+  created_at: string;
+  is_custom: boolean;
+}
+
 export const api = {
   /** Check if the gateway is reachable. */
   health: () => req<{ ok: boolean; service: string }>("/saas/health"),
@@ -297,6 +320,18 @@ export const api = {
     req<VoiceTranscriptResult>(
       "/saas/voice/transcript",
       { method: "POST", body: JSON.stringify(payload) },
+      apiKey,
+    ),
+
+  /** Get the org's current voice policy config (phrases + version history). */
+  getVoicePolicy: (apiKey: string): Promise<VoicePolicyConfig> =>
+    req<VoicePolicyConfig>("/saas/voice/policy", {}, apiKey),
+
+  /** Save a new voice policy config for the org. */
+  saveVoicePolicy: (apiKey: string, phrases: string[]): Promise<VoicePolicySaveResult> =>
+    req<VoicePolicySaveResult>(
+      "/saas/voice/policy",
+      { method: "PUT", body: JSON.stringify({ phrases }) },
       apiKey,
     ),
 };

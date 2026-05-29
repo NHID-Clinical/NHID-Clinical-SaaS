@@ -1,7 +1,8 @@
-import { useGetMe, useGetRecent } from "@/hooks/use-nhid";
+import { useState, useRef } from "react";
+import { useGetMe, useGetRecent, useVoicePolicy, useSaveVoicePolicy } from "@/hooks/use-nhid";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
-import { Activity, ShieldCheck, Zap, Server } from "lucide-react";
+import { Activity, ShieldCheck, Zap, Server, Mic, Plus, X, ChevronDown, ChevronUp } from "lucide-react";
 
 function GlassCard({
   children,
@@ -131,6 +132,315 @@ function ErrorState({ message }: { message: string }) {
         Retry
       </button>
     </div>
+  );
+}
+
+function PhraseChip({
+  phrase,
+  onRemove,
+  removable,
+}: {
+  phrase: string;
+  onRemove: () => void;
+  removable: boolean;
+}) {
+  return (
+    <span
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 5,
+        padding: "4px 10px", borderRadius: 20,
+        background: "rgba(0,194,168,0.08)",
+        border: "1px solid rgba(0,194,168,0.2)",
+        fontSize: 11, fontWeight: 600, color: "var(--nhid-teal)",
+        fontFamily: "monospace",
+      }}
+    >
+      {phrase}
+      {removable && (
+        <button
+          onClick={onRemove}
+          style={{
+            background: "none", border: "none", cursor: "pointer",
+            padding: 0, lineHeight: 1, color: "rgba(0,194,168,0.6)",
+            display: "flex", alignItems: "center",
+          }}
+          title="Remove phrase"
+        >
+          <X size={11} />
+        </button>
+      )}
+    </span>
+  );
+}
+
+function PolicyRulesCard() {
+  const { data: policy, isLoading } = useVoicePolicy();
+  const { mutate: savePolicy, isPending: saving, isError: saveError, isSuccess: saveSuccess } = useSaveVoicePolicy();
+
+  const [localPhrases, setLocalPhrases] = useState<string[] | null>(null);
+  const [newPhrase, setNewPhrase] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const activePhrases = localPhrases ?? policy?.phrases ?? [];
+  const isDirty = localPhrases !== null && JSON.stringify(localPhrases) !== JSON.stringify(policy?.phrases ?? []);
+
+  function startEditing(phrases: string[]) {
+    setLocalPhrases([...phrases]);
+  }
+
+  function removePhrase(i: number) {
+    const next = activePhrases.filter((_, idx) => idx !== i);
+    setLocalPhrases(next);
+  }
+
+  function addPhrase() {
+    const trimmed = newPhrase.trim().toLowerCase();
+    if (!trimmed) return;
+    if (activePhrases.includes(trimmed)) {
+      setNewPhrase("");
+      return;
+    }
+    const next = [...activePhrases, trimmed];
+    setLocalPhrases(next);
+    setNewPhrase("");
+    inputRef.current?.focus();
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") { e.preventDefault(); addPhrase(); }
+    if (e.key === "Escape") { setNewPhrase(""); }
+  }
+
+  function handleSave() {
+    if (!isDirty || saving) return;
+    savePolicy(activePhrases, {
+      onSuccess: () => setLocalPhrases(null),
+    });
+  }
+
+  function handleDiscard() {
+    setLocalPhrases(null);
+    setNewPhrase("");
+  }
+
+  if (isLoading) {
+    return (
+      <GlassCard style={{ padding: "22px" }}>
+        <Skeleton className="h-4 w-32 mb-4" />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+          {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-6 w-24" style={{ borderRadius: 20 }} />)}
+        </div>
+        <Skeleton className="h-8 w-full" style={{ borderRadius: 8 }} />
+      </GlassCard>
+    );
+  }
+
+  const versionLabel = policy?.is_custom ? policy.version : "default";
+  const historyEntries = policy?.history ?? [];
+
+  return (
+    <GlassCard style={{ padding: "22px" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Mic size={15} style={{ color: "var(--nhid-teal)", opacity: 0.85 }} />
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--nhid-text)" }}>
+              Voice Policy Rules
+            </div>
+            <div style={{ fontSize: 11, color: "var(--nhid-muted)", marginTop: 2 }}>
+              Phrases that trigger human escalation
+            </div>
+          </div>
+        </div>
+        <span
+          style={{
+            fontSize: 9, fontWeight: 700, fontFamily: "monospace",
+            padding: "3px 8px", borderRadius: 4,
+            background: policy?.is_custom ? "rgba(0,194,168,0.1)" : "rgba(255,255,255,0.05)",
+            border: `1px solid ${policy?.is_custom ? "rgba(0,194,168,0.25)" : "rgba(255,255,255,0.1)"}`,
+            color: policy?.is_custom ? "var(--nhid-teal)" : "var(--nhid-muted)",
+            letterSpacing: "0.06em",
+          }}
+        >
+          {versionLabel}
+        </span>
+      </div>
+
+      {/* Phrase chips */}
+      <div
+        style={{
+          display: "flex", flexWrap: "wrap", gap: 7,
+          padding: "14px", borderRadius: 10,
+          background: "rgba(255,255,255,0.02)",
+          border: "1px solid rgba(255,255,255,0.05)",
+          minHeight: 52,
+          marginBottom: 14,
+        }}
+        onClick={() => { if (localPhrases === null) startEditing(activePhrases); }}
+      >
+        {activePhrases.length === 0 ? (
+          <span style={{ fontSize: 11, color: "var(--nhid-muted)", alignSelf: "center" }}>
+            No phrases configured — all transcripts will pass unchecked.
+          </span>
+        ) : (
+          activePhrases.map((phrase, i) => (
+            <PhraseChip
+              key={phrase}
+              phrase={phrase}
+              removable={localPhrases !== null}
+              onRemove={() => removePhrase(i)}
+            />
+          ))
+        )}
+      </div>
+
+      {/* Add phrase input — only visible when editing */}
+      {localPhrases !== null && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <input
+            ref={inputRef}
+            value={newPhrase}
+            onChange={(e) => setNewPhrase(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Type a phrase and press Enter…"
+            autoFocus
+            style={{
+              flex: 1, padding: "8px 12px", borderRadius: 8, fontSize: 12,
+              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(0,194,168,0.25)",
+              color: "var(--nhid-text)", outline: "none",
+              fontFamily: "monospace",
+            }}
+          />
+          <button
+            onClick={addPhrase}
+            style={{
+              padding: "8px 12px", borderRadius: 8, cursor: "pointer",
+              background: "rgba(0,194,168,0.12)", border: "1px solid rgba(0,194,168,0.25)",
+              color: "var(--nhid-teal)", display: "flex", alignItems: "center", gap: 4,
+              fontSize: 11, fontWeight: 700,
+            }}
+          >
+            <Plus size={12} /> Add
+          </button>
+        </div>
+      )}
+
+      {/* Action row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {localPhrases === null ? (
+          <button
+            onClick={() => startEditing(activePhrases)}
+            style={{
+              padding: "7px 16px", borderRadius: 8, cursor: "pointer",
+              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+              color: "var(--nhid-muted)", fontSize: 11, fontWeight: 700,
+              fontFamily: "'Raleway', sans-serif",
+            }}
+          >
+            Edit Phrases
+          </button>
+        ) : (
+          <>
+            <button
+              onClick={handleSave}
+              disabled={!isDirty || saving}
+              style={{
+                padding: "7px 16px", borderRadius: 8, cursor: isDirty && !saving ? "pointer" : "default",
+                background: isDirty && !saving ? "rgba(0,194,168,0.15)" : "rgba(255,255,255,0.03)",
+                border: `1px solid ${isDirty && !saving ? "rgba(0,194,168,0.35)" : "rgba(255,255,255,0.08)"}`,
+                color: isDirty && !saving ? "var(--nhid-teal)" : "var(--nhid-muted)",
+                fontSize: 11, fontWeight: 700, fontFamily: "'Raleway', sans-serif",
+                transition: "all 0.15s",
+              }}
+            >
+              {saving ? "Saving…" : "Save Policy"}
+            </button>
+            <button
+              onClick={handleDiscard}
+              style={{
+                padding: "7px 14px", borderRadius: 8, cursor: "pointer",
+                background: "none", border: "1px solid rgba(255,255,255,0.08)",
+                color: "var(--nhid-muted)", fontSize: 11, fontWeight: 700,
+                fontFamily: "'Raleway', sans-serif",
+              }}
+            >
+              Discard
+            </button>
+          </>
+        )}
+
+        {saveSuccess && localPhrases === null && (
+          <span style={{ fontSize: 11, color: "var(--nhid-teal)", fontWeight: 600 }}>
+            ✓ Saved
+          </span>
+        )}
+        {saveError && (
+          <span style={{ fontSize: 11, color: "#ef4444", fontWeight: 600 }}>
+            Save failed — retry
+          </span>
+        )}
+
+        {historyEntries.length > 0 && (
+          <button
+            onClick={() => setShowHistory(v => !v)}
+            style={{
+              marginLeft: "auto", padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+              background: "none", border: "1px solid rgba(255,255,255,0.06)",
+              color: "var(--nhid-muted)", fontSize: 10, fontWeight: 700,
+              display: "flex", alignItems: "center", gap: 4,
+              fontFamily: "'Raleway', sans-serif",
+            }}
+          >
+            {showHistory ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+            {showHistory ? "Hide" : "History"} ({historyEntries.length})
+          </button>
+        )}
+      </div>
+
+      {/* Version history */}
+      {showHistory && historyEntries.length > 0 && (
+        <div style={{ marginTop: 14, borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 14 }}>
+          <div
+            style={{
+              fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+              letterSpacing: "0.1em", color: "var(--nhid-muted)", marginBottom: 10,
+            }}
+          >
+            Version History
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {historyEntries.map((entry, i) => (
+              <div
+                key={entry.id}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "9px 12px", borderRadius: 8,
+                  background: i === 0 ? "rgba(0,194,168,0.04)" : "rgba(255,255,255,0.01)",
+                  border: `1px solid ${i === 0 ? "rgba(0,194,168,0.12)" : "rgba(255,255,255,0.04)"}`,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 10, fontFamily: "monospace", color: i === 0 ? "var(--nhid-teal)" : "var(--nhid-muted)", fontWeight: 600 }}>
+                    {entry.version}
+                    {i === 0 && (
+                      <span style={{ marginLeft: 6, fontSize: 9, opacity: 0.7 }}>current</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--nhid-muted)", marginTop: 2 }}>
+                    {entry.phrases.length} phrase{entry.phrases.length !== 1 ? "s" : ""}
+                  </div>
+                </div>
+                <div style={{ fontSize: 10, color: "var(--nhid-muted)", fontFamily: "monospace", flexShrink: 0 }}>
+                  {format(new Date(entry.created_at), "MMM d, HH:mm")}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </GlassCard>
   );
 }
 
@@ -394,6 +704,9 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Policy Rules */}
+      <PolicyRulesCard />
     </div>
   );
 }

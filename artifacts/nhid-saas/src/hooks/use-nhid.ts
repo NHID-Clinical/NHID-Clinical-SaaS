@@ -101,3 +101,24 @@ export function useAuditProof(sessionId: string | null) {
     staleTime: 30_000,
   });
 }
+
+export function useVoicePolicy() {
+  const apiKey = useApiKey();
+  return useQuery({
+    queryKey: ["voicePolicy"],
+    queryFn: () => api.getVoicePolicy(apiKey!),
+    enabled: !!apiKey,
+    staleTime: 60_000,
+  });
+}
+
+export function useSaveVoicePolicy() {
+  const apiKey = useApiKey();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (phrases: string[]) => api.saveVoicePolicy(apiKey!, phrases),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["voicePolicy"] });
+    },
+  });
+}
