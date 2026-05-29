@@ -81,7 +81,11 @@ def _eval_phrase_match(
     session_state: Dict[str, Any],
     policy_version: str,
 ) -> Optional[Dict[str, Any]]:
-    phrases = rule.get("params", {}).get("phrases") or None
+    # Use the stored phrases list authoritatively.
+    # An empty list means "no triggers configured" — match nothing.
+    # Only fall back to hardcoded defaults in the legacy (non-ruleset) path.
+    phrases_val = rule.get("params", {}).get("phrases")
+    phrases: List[str] = phrases_val if isinstance(phrases_val, list) else []
     if check_escalation(transcript_text, phrases):
         return {
             "action": "escalate",

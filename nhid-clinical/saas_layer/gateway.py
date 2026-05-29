@@ -838,19 +838,32 @@ async def update_voice_policy(
 
     ruleset = []
     for r in body.rules:
-        rule = {
+        rule: Dict[str, Any] = {
             "rule_key": r.rule_key,
             "rule_type": r.rule_type,
             "label": r.label,
             "enabled": r.enabled,
             "priority": r.priority,
-            "params": r.params,
+            "params": dict(r.params),
         }
-        # Normalise phrase_match phrases
-        if r.rule_type == "phrase_match" and "phrases" in r.params:
-            rule["params"]["phrases"] = [
-                p.strip().lower() for p in r.params["phrases"] if p.strip()
-            ]
+        # Normalise and validate phrase_match params
+        if r.rule_type == "phrase_match":
+            raw = r.params.get("phrases", [])
+            if not isinstance(raw, list):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Rule '{r.rule_key}': params.phrases must be a list of strings.",
+                )
+            phrases = [p.strip().lower() for p in raw if isinstance(p, str) and p.strip()]
+            if r.enabled and not phrases:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Rule '{r.rule_key}' is enabled but has no trigger phrases. "
+                        "Either add at least one phrase or disable the rule."
+                    ),
+                )
+            rule["params"] = {"phrases": phrases}
         ruleset.append(rule)
 
     saved = voice_policy_store.save_ruleset(org["org_id"], ruleset)

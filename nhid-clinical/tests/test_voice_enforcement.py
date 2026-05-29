@@ -363,3 +363,181 @@ class TestVoiceTranscript:
                 "turn_number": 1,
             })
         assert r.status_code == 500
+
+
+class TestRulesetPolicyEngine:
+    """
+    Unit tests for the rule-based evaluation path in run_voice_policy.
+
+    These tests exercise the `ruleset=` parameter path (the preferred path used
+    by the gateway at runtime) and verify:
+      - Custom phrase lists are authoritative — no fallback to hardcoded defaults
+      - An empty phrase list means "match nothing" in ruleset mode
+      - Hardcoded defaults are only used in the legacy (no-ruleset) path
+      - Disabled rules are skipped regardless of phrase content
+      - Policy version from the ruleset is embedded in the decision
+    """
+
+    _CONFIRMED = {"disclosure_confirmed": True}
+    _UNCONFIRMED = {"disclosure_confirmed": False}
+
+    def _make_ruleset(
+        self,
+        phrases=None,
+        disclosure_enabled=True,
+        escalation_enabled=True,
+    ):
+        return [
+            {
+                "rule_key": "REQUIRE_UPFRONT_DISCLOSURE",
+                "rule_type": "builtin",
+                "enabled": disclosure_enabled,
+                "priority": 0,
+                "params": {},
+            },
+            {
+                "rule_key": "HUMAN_ESCALATION_REQUESTED",
+                "rule_type": "phrase_match",
+                "enabled": escalation_enabled,
+                "priority": 1,
+                "params": {"phrases": phrases if phrases is not None else []},
+            },
+        ]
+
+    # ── Custom phrase list tests ──────────────────────────────────────────────
+
+    def test_custom_phrase_triggers_escalate(self):
+        """A phrase from the org's custom list must trigger escalation."""
+        ruleset = self._make_ruleset(phrases=["supervisor", "billing dispute"])
+        result = run_voice_policy(
+            "I need to speak to a supervisor",
+            self._CONFIRMED,
+            ruleset=ruleset,
+            policy_version="VOICE-POLICY-v99",
+        )
+        assert result["action"] == "escalate"
+        assert result["reason_code"] == "HUMAN_ESCALATION_REQUESTED"
+
+    def test_custom_policy_version_embedded_in_decision(self):
+        """The policy_version in the decision must reflect the org's version string."""
+        ruleset = self._make_ruleset(phrases=["supervisor"])
+        result = run_voice_policy(
+            "supervisor please",
+            self._CONFIRMED,
+            ruleset=ruleset,
+            policy_version="VOICE-POLICY-v1780043501",
+        )
+        assert result["policy_version"] == "VOICE-POLICY-v1780043501"
+
+    def test_hardcoded_phrase_not_in_custom_list_does_not_escalate(self):
+        """
+        A phrase from the hardcoded _ESCALATION_PHRASES that is NOT in the
+        org's custom list must NOT trigger escalation in ruleset mode.
+        This is the core authoritativeness test.
+        """
+        # "speak to a human" is in hardcoded defaults but NOT in this custom list
+        ruleset = self._make_ruleset(phrases=["supervisor", "billing dispute"])
+        result = run_voice_policy(
+            "I want to speak to a human",
+            self._CONFIRMED,
+            ruleset=ruleset,
+        )
+        assert result["action"] == "allow", (
+            "Hardcoded phrases must not fire in ruleset mode; "
+            "only the org's custom phrases should be used."
+        )
+
+    @pytest.mark.parametrize("hardcoded_phrase", _ESCALATION_PHRASES)
+    def test_none_of_the_hardcoded_phrases_fire_with_custom_empty_ruleset_phrases(
+        self, hardcoded_phrase
+    ):
+        """
+        In ruleset mode with a custom (non-empty custom list that doesn't include
+        a legacy phrase), none of the legacy hardcoded phrases should escalate.
+        """
+        ruleset = self._make_ruleset(phrases=["unique-org-phrase-xyz"])
+        result = run_voice_policy(hardcoded_phrase, self._CONFIRMED, ruleset=ruleset)
+        assert result["action"] == "allow", (
+            f"Hardcoded phrase '{hardcoded_phrase}' must not fire "
+            f"when org has a custom list that excludes it."
+        )
+
+    # ── Empty phrase list tests ───────────────────────────────────────────────
+
+    def test_empty_phrase_list_allows_all_transcripts(self):
+        """
+        Empty phrases in ruleset mode = no triggers configured → all transcripts
+        pass (action=allow).  Must NOT fall back to hardcoded defaults.
+        """
+        ruleset = self._make_ruleset(phrases=[])
+        result = run_voice_policy(
+            "speak to a human",  # in hardcoded defaults
+            self._CONFIRMED,
+            ruleset=ruleset,
+        )
+        assert result["action"] == "allow", (
+            "Empty phrase list must mean 'no triggers' not 'use hardcoded defaults'."
+        )
+
+    def test_empty_phrase_list_does_not_escalate_any_legacy_phrase(self):
+        """Parametric check: every hardcoded phrase passes through on empty custom list."""
+        ruleset = self._make_ruleset(phrases=[])
+        for phrase in _ESCALATION_PHRASES:
+            result = run_voice_policy(phrase, self._CONFIRMED, ruleset=ruleset)
+            assert result["action"] == "allow", (
+                f"'{phrase}' must not escalate when phrase list is empty."
+            )
+
+    # ── Disabled rule tests ───────────────────────────────────────────────────
+
+    def test_disabled_escalation_rule_allows_trigger_phrase(self):
+        """A disabled phrase_match rule must be skipped — trigger phrase passes through."""
+        ruleset = self._make_ruleset(
+            phrases=["supervisor"],
+            escalation_enabled=False,
+        )
+        result = run_voice_policy("supervisor please", self._CONFIRMED, ruleset=ruleset)
+        assert result["action"] == "allow"
+
+    def test_disabled_disclosure_rule_skips_first_turn_requirement(self):
+        """A disabled REQUIRE_UPFRONT_DISCLOSURE rule must not enforce disclosure."""
+        ruleset = self._make_ruleset(
+            phrases=["supervisor"],
+            disclosure_enabled=False,
+        )
+        result = run_voice_policy("hello", self._UNCONFIRMED, ruleset=ruleset)
+        # Disclosure rule is disabled; escalation rule phrases not triggered → allow
+        assert result["action"] == "allow"
+
+    def test_both_rules_disabled_always_allows(self):
+        """With all rules disabled every transcript must be allowed."""
+        ruleset = self._make_ruleset(
+            phrases=["supervisor"],
+            disclosure_enabled=False,
+            escalation_enabled=False,
+        )
+        for text in ["", "speak to a human", "supervisor", "Hello how are you?"]:
+            result = run_voice_policy(text, self._UNCONFIRMED, ruleset=ruleset)
+            assert result["action"] == "allow", (
+                f"All-disabled ruleset must allow '{text}'."
+            )
+
+    # ── Legacy path isolation ─────────────────────────────────────────────────
+
+    def test_legacy_path_still_uses_hardcoded_defaults(self):
+        """
+        When called WITHOUT a ruleset (legacy path), hardcoded phrases must still
+        trigger escalation — backward compat for callers that haven't migrated.
+        """
+        for phrase in _ESCALATION_PHRASES:
+            result = run_voice_policy(phrase, self._CONFIRMED)  # no ruleset= arg
+            assert result["action"] == "escalate", (
+                f"Legacy path must still escalate on '{phrase}'."
+            )
+
+    def test_ruleset_none_and_ruleset_keyword_behave_identically(self):
+        """Passing ruleset=None explicitly must fall through to the legacy path."""
+        phrase = "speak to a human"
+        legacy_result = run_voice_policy(phrase, self._CONFIRMED)
+        explicit_none_result = run_voice_policy(phrase, self._CONFIRMED, ruleset=None)
+        assert legacy_result["action"] == explicit_none_result["action"] == "escalate"
