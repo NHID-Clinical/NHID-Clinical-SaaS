@@ -389,10 +389,10 @@ async def billing_webhook(request: Request):
     sig_header = request.headers.get("stripe-signature", "")
     try:
         result = handle_webhook(payload, sig_header)
+        return JSONResponse(status_code=200, content=result)
     except Exception as exc:
-        # Return 400 so Stripe retries; log locally
+        import traceback; traceback.print_exc()
         return JSONResponse(status_code=400, content={"error": str(exc)})
-    return result
 
 
 @app.get("/saas/billing/plans")

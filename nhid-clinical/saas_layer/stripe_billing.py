@@ -195,7 +195,9 @@ def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
     webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
     if webhook_secret:
-        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+        import stripe as _stripe
+        client = _stripe.StripeClient(os.environ.get("STRIPE_SECRET_KEY", ""))
+        event = client.construct_event(payload, sig_header, webhook_secret)
         event_id = event.get("id", "")
         event_type = event["type"]
         data_object = event["data"]["object"]
