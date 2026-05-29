@@ -499,6 +499,7 @@ async def saas_trace(body: TraceEventRequest, org: Dict = Depends(subscription_g
         )
 
     request_id = body.request_id or f"{body.session_id}:{body.event_type}:{body.state_before}"
+    policy_version = nhid_client.get_policy_version()
     event = {
         "event_type": body.event_type,
         "state_before": body.state_before,
@@ -507,12 +508,32 @@ async def saas_trace(body: TraceEventRequest, org: Dict = Depends(subscription_g
         "policy_action": body.policy_action,
         "reason_code": body.reason_code,
         "response_text": body.response_text,
-        "policy_version": nhid_client.get_policy_version(),
+        "policy_version": policy_version,
     }
     nhid_client.append_event(body.session_id, [event], request_id)
+
+    # Write HMAC-signed record to SaaS audit_traces (append-only, tamper-evident)
+    try:
+        audit_result = audit_svc.append_trace(
+            org_id=org["org_id"],
+            session_id=body.session_id,
+            event=event,
+        )
+    except Exception as exc:
+        _logger.error("audit_svc.append_trace failed org=%s session=%s: %s",
+                      org["org_id"], body.session_id, exc)
+        audit_result = {}
+
     increment_usage(org["org_id"])
     log_request(org["org_id"], "/saas/trace", "POST", 200, body.session_id)
-    return {"ok": True, "session_id": body.session_id, "request_id": request_id}
+    return {
+        "ok": True,
+        "session_id": body.session_id,
+        "request_id": request_id,
+        "event_id": audit_result.get("event_id"),
+        "event_hash": audit_result.get("event_hash"),
+        "seq_num": audit_result.get("seq_num"),
+    }
 
 
 # ── Proof: retrieve audit trail (subscription-gated) ─────────────────────────
@@ -535,6 +556,72 @@ async def saas_proof(session_id: str, org: Dict = Depends(subscription_gated_org
         raise HTTPException(status_code=502, detail="Audit service temporarily unavailable.")
     except Exception:
         raise HTTPException(status_code=500, detail="An error occurred retrieving the audit trail.")
+
+
+# ── Audit: cryptographic verify + enhanced proof ──────────────────────────────
+
+@app.get("/saas/audit/verify/{session_id}", tags=["Audit"])
+async def audit_verify(session_id: str, org: Dict = Depends(subscription_gated_org)):
+    """
+    Full cryptographic chain verification for a session.
+
+    Re-derives every event_hash and HMAC signature from stored data and
+    compares them against the stored values using constant-time comparison.
+    Returns a list of breaks (empty means the chain is intact).
+
+    Rate-limited: 10 calls per org per 60 seconds.
+    """
+    if not audit_svc.check_verify_rate_limit(org["org_id"]):
+        raise HTTPException(
+            status_code=429,
+            detail="Verify rate limit exceeded (10 calls/min). Please wait before retrying.",
+        )
+    try:
+        result = audit_svc.verify_chain(org["org_id"], session_id)
+    except Exception as exc:
+        _logger.error("audit_verify error org=%s session=%s: %s", org["org_id"], session_id, exc)
+        raise HTTPException(status_code=500, detail="Chain verification failed.")
+
+    log_request(org["org_id"], f"/saas/audit/verify/{session_id}", "GET", 200, session_id)
+    return {
+        "session_id": session_id,
+        "org_id": org["org_id"],
+        "chain_valid": result["chain_valid"],
+        "hmac_valid": result["hmac_valid"],
+        "event_count": result["event_count"],
+        "breaks": result["breaks"],
+    }
+
+
+@app.get("/saas/audit/proof/{session_id}", tags=["Audit"])
+async def audit_proof(session_id: str, org: Dict = Depends(subscription_gated_org)):
+    """
+    Enhanced audit proof — includes hmac_signature and per-event verification
+    status alongside the full event payload.
+
+    Use /saas/proof/{session_id} for the lightweight version (no HMAC fields).
+    Use this endpoint when you need cryptographic attestation per event.
+    """
+    try:
+        result = audit_svc.verify_chain(org["org_id"], session_id)
+    except Exception as exc:
+        _logger.error("audit_proof error org=%s session=%s: %s", org["org_id"], session_id, exc)
+        raise HTTPException(status_code=500, detail="Audit proof retrieval failed.")
+
+    if result["event_count"] == 0:
+        raise HTTPException(status_code=404, detail=f"No audit trace found for session '{session_id}' in this org.")
+
+    log_request(org["org_id"], f"/saas/audit/proof/{session_id}", "GET", 200, session_id)
+    increment_usage(org["org_id"])
+    return {
+        "session_id": session_id,
+        "org_id": org["org_id"],
+        "chain_valid": result["chain_valid"],
+        "hmac_valid": result["hmac_valid"],
+        "event_count": result["event_count"],
+        "breaks": result["breaks"],
+        "events": result["events"],
+    }
 
 
 # ── Usage: stats + activity ───────────────────────────────────────────────────
