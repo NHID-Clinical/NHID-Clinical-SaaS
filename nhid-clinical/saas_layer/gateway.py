@@ -1398,18 +1398,16 @@ async def admin_voice_sessions(
     - Filter by org_id, escalated=True, or disclosure_confirmed=False.
     - Each row includes age_hours and hours_until_purge so the UI can
       surface sessions that are about to be cleaned up.
-    - Results are ordered newest-first, capped at *limit* (max 500).
+    - Results are ordered oldest-first (nearest TTL expiry first), capped at *limit* (max 500).
     """
     sessions = list_voice_sessions(
         org_id=org_id or None,
         limit=limit,
         escalated_only=escalated_only,
         undisclosed_only=undisclosed_only,
+        oldest_first=True,  # ensures LIMIT captures the sessions most at risk of purge
     )
     enriched = [_enrich_with_ttl(s, _VOICE_SESSION_TTL_HOURS) for s in sessions]
-    # Sort by expiry risk: sessions closest to purge appear first so operators
-    # can take action before they are auto-deleted.
-    enriched.sort(key=lambda s: s["hours_until_purge"])
     escalated_count = sum(1 for s in enriched if s.get("escalated"))
     return {
         "sessions": enriched,

@@ -100,9 +100,10 @@ def list_voice_sessions(
     limit: int = 100,
     escalated_only: bool = False,
     undisclosed_only: bool = False,
+    oldest_first: bool = False,
 ) -> list:
     """
-    Return recent voice_sessions rows ordered by created_at DESC.
+    Return voice_sessions rows within the requested constraints.
 
     Parameters
     ----------
@@ -114,6 +115,10 @@ def list_voice_sessions(
         Only return sessions where escalated = TRUE.
     undisclosed_only : bool
         Only return sessions where disclosure_confirmed = FALSE.
+    oldest_first : bool
+        When True, order by created_at ASC so that sessions nearest their
+        TTL expiry are returned first and the LIMIT does not exclude them.
+        When False (default), order by created_at DESC (newest first).
     """
     limit = min(max(1, limit), 500)
     filters, params = [], []
@@ -125,6 +130,7 @@ def list_voice_sessions(
     if undisclosed_only:
         filters.append("disclosure_confirmed = FALSE")
     where = ("WHERE " + " AND ".join(filters)) if filters else ""
+    order = "ASC" if oldest_first else "DESC"
     params.append(limit)
     conn = get_conn()
     try:
@@ -135,7 +141,7 @@ def list_voice_sessions(
                 SELECT session_id, org_id, disclosure_confirmed, escalated, created_at, provider
                 FROM voice_sessions
                 {where}
-                ORDER BY created_at DESC
+                ORDER BY created_at {order}
                 LIMIT %s
                 """,
                 params,

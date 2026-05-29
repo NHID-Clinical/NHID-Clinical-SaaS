@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Shield, LogOut, RefreshCw, Eye, EyeOff, Users, Activity, AlertCircle, Lock, PhoneCall } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -366,20 +366,33 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
   const [voiceStatusFilter, setVoiceStatusFilter] = useState<"all" | "escalated" | "undisclosed">("all");
   const [voiceActionLoading, setVoiceActionLoading] = useState<Record<string, "extend" | "delete" | "confirm-delete">>({});
 
+  const fetchVoiceSessions = useCallback(async (
+    filter: "all" | "escalated" | "undisclosed",
+    orgId?: string,
+  ) => {
+    const qs = new URLSearchParams({ limit: "200" });
+    if (filter === "escalated") qs.set("escalated_only", "true");
+    if (filter === "undisclosed") qs.set("undisclosed_only", "true");
+    if (orgId?.trim()) qs.set("org_id", orgId.trim());
+    const d = await adminFetch<{ sessions: VoiceSession[]; escalated_count: number }>(
+      `/voice/sessions?${qs}`, token
+    );
+    setVoiceSessions(d.sessions);
+    setVoiceEscalatedCount(d.escalated_count);
+  }, [token]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [orgsData, usageData, voiceData] = await Promise.all([
+      const [orgsData, usageData] = await Promise.all([
         adminFetch<{ orgs: AdminOrg[]; global_stats: GlobalStats }>("/orgs", token),
         adminFetch<{ recent_activity: ActivityRow[]; global_stats: GlobalStats }>("/usage", token),
-        adminFetch<{ sessions: VoiceSession[]; total: number; escalated_count: number }>("/voice/sessions", token),
       ]);
       setOrgs(orgsData.orgs);
       setStats(orgsData.global_stats);
       setActivity(usageData.recent_activity);
-      setVoiceSessions(voiceData.sessions);
-      setVoiceEscalatedCount(voiceData.escalated_count);
+      await fetchVoiceSessions("all");
     } catch (err: any) {
       if (err.message?.startsWith("401:")) {
         onLogout();
@@ -389,9 +402,15 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
     } finally {
       setLoading(false);
     }
-  }, [token, onLogout]);
+  }, [token, onLogout, fetchVoiceSessions]);
 
   useEffect(() => { load(); }, [load]);
+
+  const isMounted = useRef(false);
+  useEffect(() => {
+    if (!isMounted.current) { isMounted.current = true; return; }
+    fetchVoiceSessions(voiceStatusFilter).catch(() => {});
+  }, [voiceStatusFilter, fetchVoiceSessions]);
 
   const toggleKey = (orgId: string) => {
     setRevealedKeys(prev => {
@@ -754,9 +773,9 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
 
         {/* Voice Sessions Table */}
         {tab === "voice" && (() => {
-          const filtered = voiceSessions
-            .filter(s => !voiceOrgFilter.trim() || s.org_id.toLowerCase().includes(voiceOrgFilter.trim().toLowerCase()))
-            .filter(s => voiceStatusFilter === "escalated" ? s.escalated : voiceStatusFilter === "undisclosed" ? !s.disclosure_confirmed : true);
+          const filtered = voiceOrgFilter.trim()
+            ? voiceSessions.filter(s => s.org_id.toLowerCase().includes(voiceOrgFilter.trim().toLowerCase()))
+            : voiceSessions;
           return (
             <div style={{
               background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,194,168,0.1)",
