@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Shield, Search, BarChart2,
-  X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard,
+  X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard, ShieldCheck,
 } from "lucide-react";
 import { useApiKey } from "@/hooks/use-nhid";
 import { useAuth } from "@workspace/replit-auth-web";
@@ -31,6 +31,7 @@ const NAV_ITEMS = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, desc: "Overview & metrics" },
   { name: "Audit Trail", href: "/trace", icon: Shield, desc: "Log an event" },
   { name: "Verification", href: "/proof", icon: Search, desc: "Verify a session" },
+  { name: "Audit", href: "/audit", icon: ShieldCheck, desc: "Chain & HMAC verify" },
   { name: "Usage", href: "/usage", icon: BarChart2, desc: "API usage stats" },
   { name: "Billing", href: "/billing", icon: CreditCard, desc: "Plans & upgrade" },
 ];

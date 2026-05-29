@@ -9,7 +9,7 @@ direct Python imports inside nhid_client — no Bridge HTTP service required.
 Production execution graph:
   Frontend (/nhid-saas/) → SaaS Gateway (port 8010) → nhid_client (in-process)
                                                       → Stripe (HTTPS)
-                                                      → saas.db (SQLite)
+                                                      → PostgreSQL (Replit managed)
 
 Core files (app.py, nhid_engine, nhid_policy, nhid_event_store, tests/) are
 never modified by this layer.
@@ -167,7 +167,7 @@ def _probe_stripe() -> str:
 
 
 def _probe_db() -> bool:
-    """Return True if saas.db is accessible."""
+    """Return True if the PostgreSQL database is accessible."""
     try:
         from saas_layer.auth import list_orgs
         list_orgs()
@@ -512,7 +512,10 @@ async def saas_trace(body: TraceEventRequest, org: Dict = Depends(subscription_g
     }
     nhid_client.append_event(body.session_id, [event], request_id)
 
-    # Write HMAC-signed record to SaaS audit_traces (append-only, tamper-evident)
+    # Write HMAC-signed record to SaaS audit_traces (append-only, tamper-evident).
+    # Hard failure: if audit write fails the whole request fails (500).
+    # The event reached NHID core above, but the caller must know the tamper-evident
+    # record was not created so they can retry rather than proceed silently.
     try:
         audit_result = audit_svc.append_trace(
             org_id=org["org_id"],
@@ -520,9 +523,14 @@ async def saas_trace(body: TraceEventRequest, org: Dict = Depends(subscription_g
             event=event,
         )
     except Exception as exc:
-        _logger.error("audit_svc.append_trace failed org=%s session=%s: %s",
-                      org["org_id"], body.session_id, exc)
-        audit_result = {}
+        _logger.error(
+            "audit_svc.append_trace FAILED — returning 500 org=%s session=%s: %s",
+            org["org_id"], body.session_id, exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Audit trace write failed. Event was not recorded in the tamper-evident log.",
+        )
 
     increment_usage(org["org_id"])
     log_request(org["org_id"], "/saas/trace", "POST", 200, body.session_id)

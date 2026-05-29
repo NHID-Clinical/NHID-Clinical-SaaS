@@ -1,7 +1,7 @@
 """
 NHID-Clinical SaaS — Stripe billing integration.
 Handles checkout session creation, webhook processing, and subscription-to-plan mapping.
-Does NOT touch NHID core.
+Does NOT touch NHID core. Backed by Replit PostgreSQL.
 
 Uses stripe 15.x StripeClient v1 namespace:
     client.v1.prices.list({"active": True})
@@ -12,14 +12,13 @@ Uses stripe 15.x StripeClient v1 namespace:
 import logging
 import os
 import json
-import sqlite3
 import stripe
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from saas_layer.stripe_client import get_stripe_client, get_secret_key
+from saas_layer.db import get_conn
 
-_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "saas.db")
 _logger = logging.getLogger("nhid.saas.billing")
 
 PLAN_METADATA_KEY = "nhid_plan"
@@ -33,88 +32,55 @@ PLAN_SLUGS = {
 FREE_DAILY_LIMIT = 100
 
 
-def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def migrate_billing_columns() -> None:
-    """Add Stripe columns and idempotency table to saas.db (idempotent)."""
-    conn = _get_conn()
-    with conn:
-        existing = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(orgs)").fetchall()
-        }
-        if "stripe_customer_id" not in existing:
-            conn.execute("ALTER TABLE orgs ADD COLUMN stripe_customer_id TEXT")
-        if "stripe_subscription_id" not in existing:
-            conn.execute("ALTER TABLE orgs ADD COLUMN stripe_subscription_id TEXT")
-        if "status" not in existing:
-            conn.execute(
-                "ALTER TABLE orgs ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
-            )
-        if "replit_user_id" not in existing:
-            conn.execute("ALTER TABLE orgs ADD COLUMN replit_user_id TEXT")
-        # Idempotency table for webhook replay safety
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS processed_events (
-                event_id     TEXT PRIMARY KEY,
-                processed_at TEXT NOT NULL
-            )
-        """)
-        # Admin sessions persistence
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS admin_sessions (
-                token      TEXT PRIMARY KEY,
-                expires_at REAL NOT NULL
-            )
-        """)
-    conn.close()
+    """No-op: column additions are handled by auth.migrate_billing_columns(). Kept for compatibility."""
+    pass
 
 
 # ── Idempotency helpers ────────────────────────────────────────────────────────
 
 def _is_processed(event_id: str) -> bool:
-    """Return True if this Stripe event_id was already handled."""
     if not event_id:
         return False
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT 1 FROM processed_events WHERE event_id = ?", (event_id,)
-    ).fetchone()
-    conn.close()
-    return row is not None
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM processed_events WHERE event_id = %s", (event_id,)
+        )
+        return cur.fetchone() is not None
+    finally:
+        conn.close()
 
 
 def _mark_processed(event_id: str) -> None:
-    """Record a Stripe event_id as handled (idempotent INSERT OR IGNORE)."""
     if not event_id:
         return
-    conn = _get_conn()
-    with conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO processed_events (event_id, processed_at) VALUES (?, ?)",
-            (event_id, _now_iso()),
-        )
-    conn.close()
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO processed_events (event_id, processed_at) VALUES (%s, %s) "
+                "ON CONFLICT (event_id) DO NOTHING",
+                (event_id, _now_iso()),
+            )
+    finally:
+        conn.close()
 
 
 def _stripe_metadata(obj: Any) -> Dict[str, str]:
-    """Convert a Stripe StripeObject metadata field to a plain dict safely."""
     try:
         return obj.metadata.to_dict()
     except Exception:
         return {}
 
 
-def get_prices() -> list[Dict[str, Any]]:
-    """List active NHID prices from Stripe (those with nhid_plan metadata)."""
+def get_prices() -> list:
     client = get_stripe_client()
     prices = client.v1.prices.list({"active": True, "expand": ["data.product"]})
     result = []
@@ -145,7 +111,6 @@ def create_checkout_session(
     success_url: str,
     cancel_url: str,
 ) -> str:
-    """Create a Stripe Checkout session for the given plan. Returns the checkout URL."""
     client = get_stripe_client()
 
     prices = get_prices()
@@ -156,11 +121,16 @@ def create_checkout_session(
         )
     price_id = matching[0]["price_id"]
 
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT stripe_customer_id FROM orgs WHERE org_id = ?", (org_id,)
-    ).fetchone()
-    conn.close()
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT stripe_customer_id FROM orgs WHERE org_id = %s", (org_id,)
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
     existing_customer_id = row["stripe_customer_id"] if row else None
 
     if existing_customer_id:
@@ -189,18 +159,10 @@ def create_checkout_session(
 
 
 def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
-    """
-    Verify and process a Stripe webhook. Returns {"handled": True, "event_type": ...}.
-    Raises stripe.error.SignatureVerificationError on bad signature.
-    Idempotent: duplicate event_ids are silently skipped.
-    """
     webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
     if webhook_secret:
         import stripe as _stripe
-        # Verify signature only — raises SignatureVerificationError if invalid.
-        # Discard the StripeObject return value and use plain JSON for data
-        # access to avoid StripeObject attribute quirks in stripe-python v15.
         _stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     else:
         import warnings
@@ -216,7 +178,6 @@ def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
 
     _logger.info("STRIPE_WEBHOOK_RECEIVED event_type=%s event_id=%s", event_type, event_id)
 
-    # Idempotency: skip already-processed events (safe for Stripe retries)
     if _is_processed(event_id):
         _logger.info("STRIPE_WEBHOOK_DUPLICATE event_id=%s — skipped", event_id)
         return {"handled": True, "event_type": event_type, "idempotent": True}
@@ -275,22 +236,26 @@ def _handle_invoice_paid(invoice: Dict) -> None:
 
 def _handle_subscription_deleted(subscription: Dict) -> None:
     subscription_id = subscription["id"]
-    org_id = subscription["metadata"]["nhid_org_id"] if subscription["metadata"] else None
+    org_id = subscription["metadata"]["nhid_org_id"] if subscription.get("metadata") else None
     if org_id:
         _update_org_stripe(org_id, status="canceled", plan="free")
     elif subscription_id:
-        conn = _get_conn()
-        row = conn.execute(
-            "SELECT org_id FROM orgs WHERE stripe_subscription_id = ?",
-            (subscription_id,),
-        ).fetchone()
-        conn.close()
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT org_id FROM orgs WHERE stripe_subscription_id = %s",
+                (subscription_id,),
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
         if row:
             _update_org_stripe(row["org_id"], status="canceled", plan="free")
 
 
 def _handle_subscription_updated(subscription: Dict) -> None:
-    org_id = subscription["metadata"]["nhid_org_id"] if subscription["metadata"] else None
+    org_id = subscription["metadata"]["nhid_org_id"] if subscription.get("metadata") else None
     status_map = {
         "active": "active",
         "past_due": "past_due",
@@ -316,27 +281,29 @@ def _update_org_stripe(
     plan: Optional[str] = None,
     status: Optional[str] = None,
 ) -> None:
-    conn = _get_conn()
     sets, vals = [], []
     if stripe_customer_id is not None:
-        sets.append("stripe_customer_id = ?")
+        sets.append("stripe_customer_id = %s")
         vals.append(stripe_customer_id)
     if stripe_subscription_id is not None:
-        sets.append("stripe_subscription_id = ?")
+        sets.append("stripe_subscription_id = %s")
         vals.append(stripe_subscription_id)
     if plan is not None:
-        sets.append("plan = ?")
+        sets.append("plan = %s")
         vals.append(plan)
     if status is not None:
-        sets.append("status = ?")
+        sets.append("status = %s")
         vals.append(status)
     if not sets:
-        conn.close()
         return
     vals.append(org_id)
-    with conn:
-        conn.execute(f"UPDATE orgs SET {', '.join(sets)} WHERE org_id = ?", vals)
-    conn.close()
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(f"UPDATE orgs SET {', '.join(sets)} WHERE org_id = %s", vals)
+    finally:
+        conn.close()
     _logger.info(
         "ORG_STATUS_UPDATED org_id=%s status=%s plan=%s",
         org_id, status or "(unchanged)", plan or "(unchanged)",
@@ -344,11 +311,6 @@ def _update_org_stripe(
 
 
 def check_subscription_gate(org: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Returns None if org is allowed through. Returns a 402 error dict if blocked.
-    Blocks ANY org with status != 'active' (free or paid).
-    Free orgs at 'active' status pass unconditionally (usage limits via billing.py).
-    """
     status = org["status"]
     plan = org["plan"]
     org_id = org.get("org_id", "?")

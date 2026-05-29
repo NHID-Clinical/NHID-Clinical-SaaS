@@ -14,6 +14,7 @@ import Trace from "@/pages/trace";
 import Proof from "@/pages/proof";
 import Billing from "@/pages/billing";
 import AdminPage from "@/pages/admin";
+import AuditPage from "@/pages/audit";
 import { useApiKey } from "@/hooks/use-nhid";
 
 const queryClient = new QueryClient();
@@ -178,6 +179,7 @@ function Router() {
               <Route path="/usage"><ProtectedRoute component={Usage} /></Route>
               <Route path="/trace"><ProtectedRoute component={Trace} /></Route>
               <Route path="/proof"><ProtectedRoute component={Proof} /></Route>
+              <Route path="/audit"><ProtectedRoute component={AuditPage} /></Route>
               <Route path="/billing"><ProtectedRoute component={Billing} /></Route>
               <Route component={NotFound} />
             </Switch>
