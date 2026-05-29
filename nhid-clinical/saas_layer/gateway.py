@@ -1319,6 +1319,10 @@ class AdminLoginRequest(BaseModel):
     password: str
 
 
+class OrgSessionRetentionBody(BaseModel):
+    voice_session_ttl_hours: Optional[int]  # None → revert to server default
+
+
 @app.post("/admin/login", tags=["Admin"])
 async def admin_login(body: AdminLoginRequest):
     """
@@ -1401,7 +1405,25 @@ def _enrich_with_ttl(session: dict, ttl_hours: int) -> dict:
         "created_at": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
         "age_hours": round(age_h, 2),
         "hours_until_purge": round(max(0.0, ttl_hours - age_h), 2),
+        "effective_ttl_hours": ttl_hours,
     }
+
+
+def _build_org_ttl_map() -> dict:
+    """
+    Return a dict mapping org_id → effective TTL hours.
+    Orgs with a null voice_session_ttl_hours fall back to _VOICE_SESSION_TTL_HOURS.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT org_id, voice_session_ttl_hours FROM orgs")
+        return {
+            r["org_id"]: (r["voice_session_ttl_hours"] or _VOICE_SESSION_TTL_HOURS)
+            for r in cur.fetchall()
+        }
+    finally:
+        conn.close()
 
 
 @app.get("/admin/voice/sessions", tags=["Admin"])
@@ -1418,6 +1440,8 @@ async def admin_voice_sessions(
     - Filter by org_id, escalated=True, or disclosure_confirmed=False.
     - Each row includes age_hours and hours_until_purge so the UI can
       surface sessions that are about to be cleaned up.
+    - hours_until_purge honours the per-org TTL (voice_session_ttl_hours on the
+      org row), falling back to the server default when not set.
     - Results are ordered oldest-first (nearest TTL expiry first), capped at *limit* (max 500).
     """
     sessions = list_voice_sessions(
@@ -1427,7 +1451,11 @@ async def admin_voice_sessions(
         undisclosed_only=undisclosed_only,
         oldest_first=True,  # ensures LIMIT captures the sessions most at risk of purge
     )
-    enriched = [_enrich_with_ttl(s, _VOICE_SESSION_TTL_HOURS) for s in sessions]
+    org_ttl_map = _build_org_ttl_map()
+    enriched = [
+        _enrich_with_ttl(s, org_ttl_map.get(s["org_id"], _VOICE_SESSION_TTL_HOURS))
+        for s in sessions
+    ]
     escalated_count = sum(1 for s in enriched if s.get("escalated"))
     return {
         "sessions": enriched,
@@ -1467,7 +1495,10 @@ async def admin_extend_voice_session(
         conn.close()
     if not row:
         raise HTTPException(status_code=404, detail=f"Voice session '{session_id}' not found after extend.")
-    return _enrich_with_ttl(dict(row), _VOICE_SESSION_TTL_HOURS)
+    org_ttl_map = _build_org_ttl_map()
+    row_dict = dict(row)
+    effective_ttl = org_ttl_map.get(row_dict["org_id"], _VOICE_SESSION_TTL_HOURS)
+    return _enrich_with_ttl(row_dict, effective_ttl)
 
 
 @app.delete("/admin/voice/sessions/{session_id}", tags=["Admin"])
@@ -1495,6 +1526,52 @@ async def admin_delete_voice_session(
     if deleted == 0:
         raise HTTPException(status_code=404, detail=f"Voice session '{session_id}' not found.")
     return {"deleted": True, "session_id": session_id}
+
+
+_VALID_TTL_VALUES = {4, 24, 72, 168}  # 4h, 24h, 72h, 7 days
+
+
+@app.patch("/admin/orgs/{org_id}/session-retention", tags=["Admin"])
+async def admin_set_org_session_retention(
+    org_id: str,
+    body: OrgSessionRetentionBody,
+    _token: str = Depends(require_admin_session),
+):
+    """
+    Set the per-org voice session retention window (TTL in hours).
+
+    Allowed values: 4, 24, 72, 168 (7 days), or null to revert to the
+    server-wide default (VOICE_SESSION_TTL_HOURS env var, default 24h).
+
+    The new TTL is honoured by the next scheduled purge_old_sessions() run
+    and by hours_until_purge calculations in the voice sessions list.
+    """
+    org = get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail=f"Org '{org_id}' not found")
+    hours = body.voice_session_ttl_hours
+    if hours is not None and hours not in _VALID_TTL_VALUES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"voice_session_ttl_hours must be one of {sorted(_VALID_TTL_VALUES)} or null",
+        )
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE orgs SET voice_session_ttl_hours = %s WHERE org_id = %s",
+                (hours, org_id),
+            )
+    finally:
+        conn.close()
+    _logger.info("ADMIN_SET_RETENTION org_id=%s voice_session_ttl_hours=%s", org_id, hours)
+    return {
+        "org_id": org_id,
+        "voice_session_ttl_hours": hours,
+        "effective_ttl_hours": hours if hours is not None else _VOICE_SESSION_TTL_HOURS,
+        "server_default_hours": _VOICE_SESSION_TTL_HOURS,
+    }
 
 
 @app.get("/admin/org/{org_id}")

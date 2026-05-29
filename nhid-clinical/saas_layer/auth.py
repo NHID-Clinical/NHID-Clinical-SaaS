@@ -161,6 +161,7 @@ def migrate_billing_columns() -> None:
                 "ALTER TABLE orgs ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT",
                 "ALTER TABLE orgs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'",
                 "ALTER TABLE orgs ADD COLUMN IF NOT EXISTS replit_user_id TEXT",
+                "ALTER TABLE orgs ADD COLUMN IF NOT EXISTS voice_session_ttl_hours INTEGER",
             ]:
                 cur.execute(stmt)
     finally:

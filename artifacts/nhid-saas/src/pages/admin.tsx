@@ -16,6 +16,7 @@ interface AdminOrg {
   active: number;
   today_requests: number;
   total_requests: number;
+  voice_session_ttl_hours: number | null;
 }
 
 interface GlobalStats {
@@ -365,6 +366,7 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
   const [voiceOrgFilter, setVoiceOrgFilter] = useState("");
   const [voiceStatusFilter, setVoiceStatusFilter] = useState<"all" | "escalated" | "undisclosed">("all");
   const [voiceActionLoading, setVoiceActionLoading] = useState<Record<string, "extend" | "delete" | "confirm-delete">>({});
+  const [retentionLoading, setRetentionLoading] = useState<Record<string, boolean>>({});
 
   const fetchVoiceSessions = useCallback(async (
     filter: "all" | "escalated" | "undisclosed",
@@ -454,6 +456,23 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
       .catch((err: any) => setError(err.message ?? "Failed to delete session"))
       .finally(() => setVoiceActionLoading(p => { const n = { ...p }; delete n[sid]; return n; }));
   }, [token, voiceActionLoading, voiceSessions]);
+
+  const handleSetRetention = useCallback(async (orgId: string, hours: number | null) => {
+    setRetentionLoading(p => ({ ...p, [orgId]: true }));
+    try {
+      await adminFetch(`/orgs/${orgId}/session-retention`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ voice_session_ttl_hours: hours }),
+      });
+      setOrgs(prev => prev.map(o =>
+        o.org_id === orgId ? { ...o, voice_session_ttl_hours: hours } : o
+      ));
+    } catch (err: any) {
+      setError(err.message ?? "Failed to update session retention");
+    } finally {
+      setRetentionLoading(p => { const n = { ...p }; delete n[orgId]; return n; });
+    }
+  }, [token]);
 
   const filteredOrgs = orgs.filter(o =>
     search === "" ||
@@ -676,6 +695,7 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                       <th style={tableHd}>Status</th>
                       <th style={tableHd}>Total Reqs</th>
                       <th style={tableHd}>Today</th>
+                      <th style={tableHd}>Session Retention</th>
                       <th style={tableHd}>API Key</th>
                       <th style={tableHd}>Stripe Sub</th>
                       <th style={tableHd}>Created</th>
@@ -707,6 +727,33 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                           {org.total_requests.toLocaleString()}
                         </td>
                         <td style={{ ...tableTd, color: "#e0e8f4" }}>{org.today_requests}</td>
+                        <td style={tableTd}>
+                          <select
+                            value={org.voice_session_ttl_hours ?? ""}
+                            disabled={!!retentionLoading[org.org_id]}
+                            onChange={e => {
+                              const val = e.target.value;
+                              handleSetRetention(org.org_id, val === "" ? null : Number(val));
+                            }}
+                            style={{
+                              padding: "4px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                              background: retentionLoading[org.org_id]
+                                ? "rgba(255,255,255,0.02)"
+                                : "rgba(0,194,168,0.07)",
+                              border: "1px solid rgba(0,194,168,0.25)",
+                              color: retentionLoading[org.org_id] ? "#4b5563" : "#00c2a8",
+                              cursor: retentionLoading[org.org_id] ? "default" : "pointer",
+                              fontFamily: "'Raleway', sans-serif",
+                              outline: "none",
+                            }}
+                          >
+                            <option value="">Default (24h)</option>
+                            <option value="4">4h</option>
+                            <option value="24">24h</option>
+                            <option value="72">72h</option>
+                            <option value="168">7d</option>
+                          </select>
+                        </td>
                         <td style={tableTd}>
                           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             <code style={{

@@ -188,12 +188,18 @@ def delete_voice_session(session_id: str) -> None:
         conn.close()
 
 
-def purge_old_sessions(ttl_hours: int = 24) -> int:
+def purge_old_sessions(default_ttl_hours: int = 24) -> int:
     """
-    Delete voice_sessions rows whose created_at is older than *ttl_hours*.
+    Delete voice_sessions rows using per-org TTL where configured, falling
+    back to *default_ttl_hours* for orgs that have not set a custom policy.
 
-    Uses the ``idx_vs_created_at`` index so the DELETE is efficient even on
-    large tables.  Returns the number of rows deleted.
+    Two DELETE statements are issued inside one transaction:
+      1. Orgs with a non-null ``voice_session_ttl_hours`` — uses the org's
+         own value via ``make_interval(hours => o.voice_session_ttl_hours)``.
+      2. Orgs with ``voice_session_ttl_hours IS NULL`` — uses *default_ttl_hours*.
+
+    Uses the ``idx_vs_created_at`` index so both DELETEs are efficient even on
+    large tables.  Returns the total number of rows deleted.
 
     This function opens and closes its own connection and is safe to call
     from any thread or asyncio task without holding any application lock.
@@ -202,16 +208,35 @@ def purge_old_sessions(ttl_hours: int = 24) -> int:
     try:
         with conn:
             cur = conn.cursor()
+            # 1. Orgs with a custom TTL
             cur.execute(
                 """
-                DELETE FROM voice_sessions
-                WHERE created_at < NOW() - INTERVAL '%s hours'
-                """,
-                (ttl_hours,),
+                DELETE FROM voice_sessions vs
+                USING orgs o
+                WHERE vs.org_id = o.org_id
+                  AND o.voice_session_ttl_hours IS NOT NULL
+                  AND vs.created_at < NOW() - make_interval(hours => o.voice_session_ttl_hours)
+                """
             )
-            deleted = cur.rowcount
+            deleted_custom = cur.rowcount
+            # 2. Orgs using the server-wide default TTL
+            cur.execute(
+                """
+                DELETE FROM voice_sessions vs
+                USING orgs o
+                WHERE vs.org_id = o.org_id
+                  AND o.voice_session_ttl_hours IS NULL
+                  AND vs.created_at < NOW() - make_interval(hours => %s)
+                """,
+                (default_ttl_hours,),
+            )
+            deleted_default = cur.rowcount
+            deleted = deleted_custom + deleted_default
     finally:
         conn.close()
     if deleted:
-        logger.info("voice_sessions purge: removed %d rows older than %dh", deleted, ttl_hours)
+        logger.info(
+            "voice_sessions purge: removed %d rows (default_ttl=%dh, custom=%d, default=%d)",
+            deleted, default_ttl_hours, deleted_custom, deleted_default,
+        )
     return deleted
