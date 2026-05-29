@@ -1,0 +1,954 @@
+import { useState, useCallback, useEffect } from "react";
+import { Link } from "wouter";
+import {
+  Shield, CheckCircle, XCircle, Copy, Check, ArrowRight,
+  Zap, RefreshCw, ChevronDown, ChevronRight, ExternalLink,
+  AlertTriangle, Layers, Lock,
+} from "lucide-react";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const SAAS = `${BASE}/saas-api/saas`;
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface DemoOrg {
+  org_id: string;
+  org_name: string;
+  api_key: string;
+  plan: string;
+}
+
+interface SentEvent {
+  preset_id: string;
+  preset_label: string;
+  color: string;
+  request_id: string;
+  session_id: string;
+  timestamp: string;
+}
+
+interface AuditEvent {
+  event_id: string;
+  seq_num: number;
+  event_type: string | null;
+  state_before: string | null;
+  state_after: string | null;
+  input_text: string | null;
+  policy_action: string | null;
+  reason_code: string | null;
+  event_hash: string;
+  hmac_signature: string;
+  hash_ok: boolean;
+  hmac_ok: boolean;
+  timestamp: string;
+}
+
+interface ProofData {
+  chain_valid: boolean;
+  hmac_valid: boolean;
+  event_count: number;
+  breaks: Array<{ seq_num: number; event_id: string; reason: string }>;
+  events: AuditEvent[];
+}
+
+// ── Demo event presets ─────────────────────────────────────────────────────────
+
+const PRESETS = [
+  {
+    id: "session_start",
+    label: "Session Start",
+    color: "#00c2a8",
+    desc: "A new clinical AI session is opened",
+    badge: "lifecycle",
+    payload: {
+      event_type: "session_started",
+      state_before: "inactive",
+      state_after: "active",
+      input_text: null,
+      policy_action: "allow",
+      reason_code: null,
+      response_text: null,
+    },
+  },
+  {
+    id: "inference",
+    label: "Inference Request",
+    color: "#53d8fb",
+    desc: "User query sent to the AI model",
+    badge: "ai",
+    payload: {
+      event_type: "inference_requested",
+      state_before: "idle",
+      state_after: "processing",
+      input_text: "What medications interact with warfarin?",
+      policy_action: null,
+      reason_code: null,
+      response_text: null,
+    },
+  },
+  {
+    id: "policy_block",
+    label: "Policy Block",
+    color: "#ef4444",
+    desc: "Governance layer blocks a medical advice request",
+    badge: "governance",
+    payload: {
+      event_type: "policy_evaluation",
+      state_before: "processing",
+      state_after: "blocked",
+      input_text: "Recommend a dosage adjustment for my patient.",
+      policy_action: "block",
+      reason_code: "P01_MEDICAL_ADVICE",
+      response_text: "I cannot provide dosage recommendations.",
+    },
+  },
+  {
+    id: "response",
+    label: "Response Generated",
+    color: "#a78bfa",
+    desc: "AI generates an approved, logged response",
+    badge: "ai",
+    payload: {
+      event_type: "response_generated",
+      state_before: "processing",
+      state_after: "delivered",
+      input_text: "What are common warfarin drug interactions?",
+      policy_action: "allow",
+      reason_code: null,
+      response_text: "Common warfarin interactions include NSAIDs, antibiotics, and vitamin K supplements.",
+    },
+  },
+  {
+    id: "session_end",
+    label: "Session End",
+    color: "#94a3b8",
+    desc: "Session is closed and the chain is sealed",
+    badge: "lifecycle",
+    payload: {
+      event_type: "session_ended",
+      state_before: "active",
+      state_after: "closed",
+      input_text: null,
+      policy_action: "allow",
+      reason_code: null,
+      response_text: null,
+    },
+  },
+] as const;
+
+type PresetId = typeof PRESETS[number]["id"];
+
+// ── Small components ───────────────────────────────────────────────────────────
+
+function CopyBtn({ value, size = 12 }: { value: string; size?: number }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={async () => {
+        await navigator.clipboard.writeText(value).catch(() => {});
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      }}
+      title="Copy"
+      style={{
+        background: "none", border: "none", cursor: "pointer",
+        color: copied ? "#00c2a8" : "#475569", padding: "2px 4px", flexShrink: 0,
+      }}
+    >
+      {copied ? <Check size={size} /> : <Copy size={size} />}
+    </button>
+  );
+}
+
+function HashChip({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 3,
+      padding: "2px 7px", borderRadius: 99, fontSize: 10, fontWeight: 700,
+      letterSpacing: "0.04em",
+      background: ok ? "rgba(0,194,168,0.15)" : "rgba(239,68,68,0.15)",
+      color: ok ? "#00c2a8" : "#ef4444",
+      border: `1px solid ${ok ? "rgba(0,194,168,0.3)" : "rgba(239,68,68,0.3)"}`,
+    }}>
+      {ok ? <CheckCircle size={9} /> : <XCircle size={9} />}
+      {label}
+    </span>
+  );
+}
+
+function SectionCard({ children, style = {} as React.CSSProperties }: {
+  children: React.ReactNode; style?: React.CSSProperties;
+}) {
+  return (
+    <div style={{
+      background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)",
+      borderRadius: 16, ...style,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function StepBadge({ n, done }: { n: number; done: boolean }) {
+  return (
+    <div style={{
+      width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+      background: done ? "rgba(0,194,168,0.2)" : "rgba(255,255,255,0.07)",
+      border: `1px solid ${done ? "rgba(0,194,168,0.4)" : "rgba(255,255,255,0.12)"}`,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: 12, fontWeight: 800,
+      color: done ? "#00c2a8" : "#64748b",
+    }}>
+      {done ? <CheckCircle size={14} /> : n}
+    </div>
+  );
+}
+
+// ── Proof viewer (inline) ──────────────────────────────────────────────────────
+
+function ProofViewer({ proof }: { proof: ProofData }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const ok = proof.chain_valid && proof.hmac_valid;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* Chain summary */}
+      <div style={{
+        borderRadius: 10, padding: "12px 16px",
+        background: ok ? "rgba(0,194,168,0.07)" : "rgba(239,68,68,0.07)",
+        border: `1px solid ${ok ? "rgba(0,194,168,0.25)" : "rgba(239,68,68,0.25)"}`,
+        display: "flex", alignItems: "center", gap: 12,
+      }}>
+        {ok ? <CheckCircle size={18} color="#00c2a8" /> : <XCircle size={18} color="#ef4444" />}
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: ok ? "#00c2a8" : "#ef4444" }}>
+            {ok ? "Chain intact — no tampering detected" : "Integrity violation detected"}
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+            {proof.event_count} event{proof.event_count !== 1 ? "s" : ""} cryptographically verified
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <HashChip ok={proof.chain_valid} label="Hash chain" />
+          <HashChip ok={proof.hmac_valid} label="HMAC" />
+        </div>
+      </div>
+
+      {/* Event list */}
+      {proof.events.map((ev) => (
+        <div key={ev.event_id} style={{
+          border: "1px solid rgba(255,255,255,0.06)",
+          borderRadius: 10, overflow: "hidden",
+          background: ev.hash_ok && ev.hmac_ok ? "rgba(255,255,255,0.02)" : "rgba(239,68,68,0.04)",
+        }}>
+          <button
+            onClick={() => setExpanded(x => x === ev.event_id ? null : ev.event_id)}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", gap: 10,
+              padding: "10px 14px", background: "none", border: "none",
+              cursor: "pointer", textAlign: "left",
+            }}
+          >
+            {expanded === ev.event_id
+              ? <ChevronDown size={13} color="#475569" />
+              : <ChevronRight size={13} color="#475569" />
+            }
+            <span style={{
+              fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 5,
+              background: "rgba(255,255,255,0.06)", color: "#94a3b8",
+            }}>
+              #{ev.seq_num}
+            </span>
+            <span style={{
+              fontSize: 11, fontWeight: 600, color: "#e2e8f0", flex: 1,
+            }}>
+              {ev.event_type?.replace(/_/g, " ") ?? "event"}
+            </span>
+            <span style={{ fontSize: 10, color: "#475569", fontFamily: "monospace" }}>
+              {ev.state_before} → {ev.state_after}
+            </span>
+            <div style={{ display: "flex", gap: 5, marginLeft: 8 }}>
+              <HashChip ok={ev.hash_ok} label="chain" />
+              <HashChip ok={ev.hmac_ok} label="hmac" />
+            </div>
+          </button>
+          {expanded === ev.event_id && (
+            <div style={{ padding: "10px 14px 14px", borderTop: "1px solid rgba(255,255,255,0.05)", background: "rgba(0,0,0,0.2)" }}>
+              {ev.input_text && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Input Text</div>
+                  <div style={{ fontSize: 12, color: "#cbd5e1", fontStyle: "italic" }}>"{ev.input_text}"</div>
+                </div>
+              )}
+              {[
+                { label: "Event Hash (SHA-256)", value: ev.event_hash, color: "#53d8fb" },
+                { label: "HMAC Signature", value: ev.hmac_signature, color: "#00c2a8" },
+              ].map(({ label, value, color }) => (
+                <div key={label} style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{label}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(0,0,0,0.3)", borderRadius: 6, padding: "6px 10px", border: "1px solid rgba(255,255,255,0.05)" }}>
+                    <code style={{ flex: 1, fontSize: 9, color, fontFamily: "monospace", wordBreak: "break-all", lineHeight: 1.5 }}>{value}</code>
+                    <CopyBtn value={value} size={10} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Main TryPage ───────────────────────────────────────────────────────────────
+
+function genSessionId() {
+  return `demo_sess_${Math.random().toString(36).substring(2, 10)}`;
+}
+function genOrgName() {
+  return `Demo-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+}
+
+export default function TryPage() {
+  useEffect(() => {
+    document.documentElement.classList.add("dark");
+  }, []);
+
+  // ── State
+  const [orgNameInput, setOrgNameInput] = useState(genOrgName);
+  const [org, setOrg] = useState<DemoOrg | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const [sessionId, setSessionId] = useState(genSessionId);
+  const [selectedPresetId, setSelectedPresetId] = useState<PresetId>("policy_block");
+  const [sentEvents, setSentEvents] = useState<SentEvent[]>([]);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+
+  const [proof, setProof] = useState<ProofData | null>(null);
+  const [loadingProof, setLoadingProof] = useState(false);
+  const [proofError, setProofError] = useState<string | null>(null);
+  const [proofOpen, setProofOpen] = useState(false);
+
+  const [verifyResult, setVerifyResult] = useState<{ chain_valid: boolean; hmac_valid: boolean; event_count: number; breaks: any[] } | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  const selectedPreset = PRESETS.find(p => p.id === selectedPresetId)!;
+
+  // ── Create demo org
+  const createOrg = useCallback(async () => {
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const res = await fetch(`${SAAS}/orgs/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ org_name: orgNameInput.trim() || genOrgName() }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Error ${res.status}`);
+      }
+      const data: DemoOrg = await res.json();
+      setOrg(data);
+      // Store in localStorage so the full app works immediately
+      localStorage.setItem("nhid_api_key", data.api_key);
+      localStorage.setItem("nhid_org", JSON.stringify({ org_id: data.org_id, org_name: data.org_name }));
+      window.dispatchEvent(new Event("storage"));
+    } catch (e: any) {
+      setCreateError(e.message || "Failed to create demo workspace");
+    } finally {
+      setCreating(false);
+    }
+  }, [orgNameInput]);
+
+  // ── Send test event
+  const sendEvent = useCallback(async () => {
+    if (!org) return;
+    setSending(true);
+    setSendError(null);
+    // Reset proof/verify when sending new events
+    setProof(null);
+    setProofOpen(false);
+    setVerifyResult(null);
+    try {
+      const res = await fetch(`${SAAS}/trace`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": org.api_key },
+        body: JSON.stringify({ session_id: sessionId, ...selectedPreset.payload }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Error ${res.status}`);
+      }
+      const data = await res.json();
+      setSentEvents(prev => [...prev, {
+        preset_id: selectedPreset.id,
+        preset_label: selectedPreset.label,
+        color: selectedPreset.color,
+        request_id: data.request_id,
+        session_id: data.session_id,
+        timestamp: new Date().toISOString(),
+      }]);
+    } catch (e: any) {
+      setSendError(e.message || "Failed to send event");
+    } finally {
+      setSending(false);
+    }
+  }, [org, sessionId, selectedPreset]);
+
+  // ── View proof
+  const loadProof = useCallback(async () => {
+    if (!org) return;
+    setLoadingProof(true);
+    setProofError(null);
+    setVerifyResult(null);
+    try {
+      const res = await fetch(`${SAAS}/audit/proof/${encodeURIComponent(sessionId)}`, {
+        headers: { "X-API-Key": org.api_key },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Error ${res.status}`);
+      }
+      const data: ProofData = await res.json();
+      setProof(data);
+      setProofOpen(true);
+    } catch (e: any) {
+      setProofError(e.message || "Failed to load proof");
+    } finally {
+      setLoadingProof(false);
+    }
+  }, [org, sessionId]);
+
+  // ── Verify chain
+  const verifyChain = useCallback(async () => {
+    if (!org) return;
+    setVerifying(true);
+    setVerifyError(null);
+    try {
+      const res = await fetch(`${SAAS}/audit/verify/${encodeURIComponent(sessionId)}`, {
+        headers: { "X-API-Key": org.api_key },
+      });
+      if (res.status === 429) throw new Error("Rate limited (10 calls/min). Wait a moment and retry.");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Error ${res.status}`);
+      }
+      const data = await res.json();
+      setVerifyResult(data);
+    } catch (e: any) {
+      setVerifyError(e.message || "Verification failed");
+    } finally {
+      setVerifying(false);
+    }
+  }, [org, sessionId]);
+
+  const resetSession = () => {
+    setSessionId(genSessionId());
+    setSentEvents([]);
+    setProof(null);
+    setProofOpen(false);
+    setProofError(null);
+    setVerifyResult(null);
+    setVerifyError(null);
+  };
+
+  const hasSentEvents = sentEvents.length > 0;
+
+  // ── Layout helpers
+  const card = (style: React.CSSProperties = {}) => ({
+    background: "rgba(255,255,255,0.025)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 16, ...style,
+  });
+
+  return (
+    <div style={{
+      minHeight: "100dvh",
+      background: "var(--nhid-bg)",
+      fontFamily: "'Raleway', sans-serif",
+      color: "var(--nhid-text)",
+    }}>
+      {/* ── Top header */}
+      <header style={{
+        borderBottom: "1px solid rgba(255,255,255,0.07)",
+        background: "rgba(7,12,23,0.9)",
+        backdropFilter: "blur(14px)",
+        position: "sticky", top: 0, zIndex: 30,
+        padding: "0 24px",
+        display: "flex", alignItems: "center", height: 56, gap: 14,
+      }}>
+        <div style={{
+          width: 32, height: 32, borderRadius: 9,
+          background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontWeight: 900, fontSize: 15, color: "#070c17",
+          boxShadow: "0 0 14px rgba(0,194,168,0.4)",
+          flexShrink: 0,
+        }}>
+          N
+        </div>
+        <div>
+          <span style={{ fontWeight: 800, fontSize: 13, color: "var(--nhid-text)" }}>NHID Clinical</span>
+          <span style={{ marginLeft: 8, fontSize: 10, color: "#334155", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase" }}>Demo</span>
+        </div>
+        <div style={{ flex: 1 }} />
+        <Link
+          href="/dashboard"
+          style={{
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "7px 14px", borderRadius: 8, textDecoration: "none",
+            background: "rgba(0,194,168,0.1)", border: "1px solid rgba(0,194,168,0.25)",
+            color: "#00c2a8", fontSize: 12, fontWeight: 700,
+            transition: "all 0.15s",
+          }}
+        >
+          <Lock size={11} />
+          Sign In for Full Access
+          <ExternalLink size={10} />
+        </Link>
+      </header>
+
+      {/* ── Content */}
+      <div style={{ maxWidth: 780, margin: "0 auto", padding: "40px 24px 80px" }}>
+
+        {/* ── Hero */}
+        <div style={{ textAlign: "center", marginBottom: 48 }}>
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: 7,
+            padding: "5px 14px", borderRadius: 99, marginBottom: 20,
+            background: "rgba(0,194,168,0.1)", border: "1px solid rgba(0,194,168,0.25)",
+            fontSize: 11, fontWeight: 700, color: "#00c2a8", letterSpacing: "0.08em",
+          }}>
+            <Zap size={11} />
+            LIVE DEMO — NO ACCOUNT NEEDED
+          </div>
+          <h1 style={{
+            fontSize: 40, fontWeight: 900, color: "var(--nhid-text)",
+            letterSpacing: "-0.03em", lineHeight: 1.15, marginBottom: 16,
+          }}>
+            Try NHID-Clinical
+            <br />
+            <span style={{ background: "linear-gradient(135deg, #00c2a8, #53d8fb)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+              Test the Governance Layer
+            </span>
+          </h1>
+          <p style={{
+            fontSize: 15, color: "#64748b", maxWidth: 520, margin: "0 auto", lineHeight: 1.7,
+          }}>
+            Send real audit events, get back signed cryptographic proofs,
+            and verify the tamper-evident chain — all without an account.
+          </p>
+        </div>
+
+        {/* ── Feature pills */}
+        <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginBottom: 44 }}>
+          {[
+            { label: "SHA-256 hash chaining", color: "#53d8fb" },
+            { label: "HMAC signatures", color: "#00c2a8" },
+            { label: "Policy enforcement", color: "#fbbd24" },
+            { label: "Tamper detection", color: "#a78bfa" },
+          ].map(({ label, color }) => (
+            <span key={label} style={{
+              fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: 99,
+              background: `${color}10`, border: `1px solid ${color}25`, color,
+            }}>
+              {label}
+            </span>
+          ))}
+        </div>
+
+        {/* ── Step 1: Create workspace */}
+        <div style={{ ...card(), marginBottom: 16 }}>
+          <div style={{ padding: "18px 22px", borderBottom: org ? "1px solid rgba(255,255,255,0.05)" : undefined }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: org ? 0 : 18 }}>
+              <StepBadge n={1} done={!!org} />
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)" }}>
+                  {org ? "Demo Workspace Ready" : "Create Your Demo Workspace"}
+                </div>
+                {!org && (
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                    Instant free-tier org — generates a real API key
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {!org && (
+              <div>
+                <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+                  <input
+                    value={orgNameInput}
+                    onChange={e => setOrgNameInput(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && createOrg()}
+                    placeholder="Workspace name (auto-generated)"
+                    style={{
+                      flex: 1, padding: "11px 14px", borderRadius: 9,
+                      background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                      color: "var(--nhid-text)", fontSize: 14, outline: "none",
+                      fontFamily: "'Raleway', sans-serif",
+                    }}
+                    onFocus={e => (e.target.style.borderColor = "rgba(0,194,168,0.5)")}
+                    onBlur={e => (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
+                  />
+                  <button
+                    onClick={createOrg}
+                    disabled={creating}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "11px 22px", borderRadius: 9, fontSize: 14, fontWeight: 800,
+                      background: creating ? "rgba(0,194,168,0.3)" : "linear-gradient(135deg, #00c2a8, #53d8fb)",
+                      border: "none", color: "#070c17", cursor: creating ? "not-allowed" : "pointer",
+                      fontFamily: "'Raleway', sans-serif",
+                      boxShadow: creating ? "none" : "0 0 24px rgba(0,194,168,0.3)",
+                      transition: "all 0.2s", flexShrink: 0,
+                    }}
+                  >
+                    {creating
+                      ? <RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} />
+                      : <Zap size={14} />
+                    }
+                    {creating ? "Creating…" : "Start Demo"}
+                  </button>
+                </div>
+                {createError && (
+                  <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <AlertTriangle size={13} color="#ef4444" style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span style={{ fontSize: 12, color: "#fca5a5" }}>{createError}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Org details after creation */}
+          {org && (
+            <div style={{ padding: "16px 22px", display: "flex", flexWrap: "wrap", gap: "12px 32px" }}>
+              {[
+                { label: "Workspace", value: org.org_name, mono: false, color: "#e2e8f0" },
+                { label: "Plan", value: "Free tier · 100 calls/day", mono: false, color: "#64748b" },
+              ].map(({ label, value, mono, color }) => (
+                <div key={label}>
+                  <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: 13, color, fontFamily: mono ? "monospace" : "inherit" }}>{value}</div>
+                </div>
+              ))}
+              <div>
+                <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>API Key</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <code style={{ fontSize: 12, color: "#00c2a8", fontFamily: "monospace" }}>
+                    {`${org.api_key.slice(0, 14)}••••••${org.api_key.slice(-4)}`}
+                  </code>
+                  <CopyBtn value={org.api_key} />
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Session ID</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <code style={{ fontSize: 11, color: "#53d8fb", fontFamily: "monospace" }}>{sessionId}</code>
+                  <CopyBtn value={sessionId} size={10} />
+                  <button
+                    onClick={resetSession}
+                    title="New session"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#334155", padding: "2px 4px" }}
+                  >
+                    <RefreshCw size={10} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Step 2: Pick an event */}
+        {org && (
+          <div style={{ ...card(), marginBottom: 16 }}>
+            <div style={{ padding: "18px 22px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                <StepBadge n={2} done={hasSentEvents} />
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)" }}>Send an Audit Event</div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                    Pick a preset — each sends a real signed event to the chain
+                  </div>
+                </div>
+              </div>
+
+              {/* Preset cards */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8, marginBottom: 18 }}>
+                {PRESETS.map(p => {
+                  const active = selectedPresetId === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => setSelectedPresetId(p.id as PresetId)}
+                      style={{
+                        padding: "12px 12px", borderRadius: 10, cursor: "pointer",
+                        background: active ? `${p.color}12` : "rgba(255,255,255,0.03)",
+                        border: `1px solid ${active ? p.color + "40" : "rgba(255,255,255,0.07)"}`,
+                        color: active ? p.color : "#64748b",
+                        fontFamily: "'Raleway', sans-serif",
+                        textAlign: "left",
+                        boxShadow: active ? `0 0 16px ${p.color}18` : "none",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, color: active ? p.color : "#94a3b8" }}>
+                        {p.label}
+                      </div>
+                      <div style={{ fontSize: 10, color: active ? `${p.color}cc` : "#334155", lineHeight: 1.4 }}>
+                        {p.desc}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Selected event preview */}
+              <div style={{
+                background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "14px 16px",
+                border: "1px solid rgba(255,255,255,0.05)", marginBottom: 14,
+              }}>
+                <div style={{ fontSize: 10, color: "#475569", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10, fontWeight: 700 }}>
+                  Event Payload Preview
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 20px" }}>
+                  {[
+                    { label: "event_type", value: selectedPreset.payload.event_type },
+                    { label: "state", value: `${selectedPreset.payload.state_before} → ${selectedPreset.payload.state_after}` },
+                    { label: "policy_action", value: selectedPreset.payload.policy_action ?? "—" },
+                    { label: "reason_code", value: selectedPreset.payload.reason_code ?? "—" },
+                  ].map(({ label, value }) => (
+                    <div key={label}>
+                      <div style={{ fontSize: 9, color: "#334155", marginBottom: 2 }}>{label}</div>
+                      <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: "monospace" }}>{value}</div>
+                    </div>
+                  ))}
+                  {selectedPreset.payload.input_text && (
+                    <div style={{ gridColumn: "span 2" }}>
+                      <div style={{ fontSize: 9, color: "#334155", marginBottom: 2 }}>input_text</div>
+                      <div style={{ fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>
+                        "{selectedPreset.payload.input_text}"
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Send button */}
+              <button
+                onClick={sendEvent}
+                disabled={sending}
+                style={{
+                  width: "100%", padding: "13px", borderRadius: 10, fontSize: 14, fontWeight: 800,
+                  background: sending ? "rgba(0,194,168,0.3)" : "linear-gradient(135deg, #00c2a8, #53d8fb)",
+                  border: "none", color: "#070c17", cursor: sending ? "not-allowed" : "pointer",
+                  fontFamily: "'Raleway', sans-serif",
+                  boxShadow: sending ? "none" : "0 0 28px rgba(0,194,168,0.3)",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 9,
+                  transition: "all 0.2s",
+                }}
+              >
+                {sending
+                  ? <RefreshCw size={15} style={{ animation: "spin 1s linear infinite" }} />
+                  : <Shield size={15} />
+                }
+                {sending ? "Signing & Appending to Chain…" : `Send Audit Event: ${selectedPreset.label}`}
+              </button>
+
+              {sendError && (
+                <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <AlertTriangle size={13} color="#ef4444" style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span style={{ fontSize: 12, color: "#fca5a5" }}>{sendError}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 3: Sent events + proof/verify */}
+        {hasSentEvents && (
+          <div style={{ ...card(), marginBottom: 16 }}>
+            <div style={{ padding: "18px 22px 20px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                <StepBadge n={3} done={!!proof || !!verifyResult} />
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)" }}>
+                    {sentEvents.length} Event{sentEvents.length !== 1 ? "s" : ""} Appended to Chain
+                  </div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                    Each event is cryptographically signed and hash-chained
+                  </div>
+                </div>
+              </div>
+
+              {/* Event receipt list */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 18 }}>
+                {sentEvents.map((ev, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 12,
+                      padding: "10px 14px", borderRadius: 9,
+                      background: "rgba(0,194,168,0.05)", border: "1px solid rgba(0,194,168,0.15)",
+                      animation: i === sentEvents.length - 1 ? "slideIn 0.3s ease" : "none",
+                    }}
+                  >
+                    <CheckCircle size={14} color="#00c2a8" style={{ flexShrink: 0 }} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: ev.color }}>
+                      {ev.preset_label}
+                    </span>
+                    <ArrowRight size={10} color="#334155" />
+                    <code style={{ fontSize: 10, color: "#53d8fb", fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {ev.request_id}
+                    </code>
+                    <CopyBtn value={ev.request_id} size={10} />
+                    <span style={{ fontSize: 9, color: "#334155", flexShrink: 0 }}>
+                      {new Date(ev.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Action buttons */}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  onClick={loadProof}
+                  disabled={loadingProof}
+                  style={{
+                    flex: 1, minWidth: 160, display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+                    padding: "11px 18px", borderRadius: 9, fontSize: 13, fontWeight: 700,
+                    background: loadingProof ? "rgba(83,216,251,0.15)" : "rgba(83,216,251,0.1)",
+                    border: "1px solid rgba(83,216,251,0.3)", color: "#53d8fb",
+                    cursor: loadingProof ? "not-allowed" : "pointer",
+                    fontFamily: "'Raleway', sans-serif", transition: "all 0.15s",
+                  }}
+                >
+                  {loadingProof ? <RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Layers size={13} />}
+                  {loadingProof ? "Loading…" : "View Full Proof"}
+                </button>
+                <button
+                  onClick={verifyChain}
+                  disabled={verifying}
+                  style={{
+                    flex: 1, minWidth: 160, display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+                    padding: "11px 18px", borderRadius: 9, fontSize: 13, fontWeight: 700,
+                    background: verifying ? "rgba(0,194,168,0.15)" : "rgba(0,194,168,0.1)",
+                    border: "1px solid rgba(0,194,168,0.3)", color: "#00c2a8",
+                    cursor: verifying ? "not-allowed" : "pointer",
+                    fontFamily: "'Raleway', sans-serif", transition: "all 0.15s",
+                  }}
+                >
+                  {verifying ? <RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Shield size={13} />}
+                  {verifying ? "Verifying…" : "Verify Full Chain"}
+                </button>
+              </div>
+
+              {(proofError || verifyError) && (
+                <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <AlertTriangle size={13} color="#ef4444" style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span style={{ fontSize: 12, color: "#fca5a5" }}>{proofError || verifyError}</span>
+                </div>
+              )}
+
+              {/* Verify result banner */}
+              {verifyResult && (
+                <div style={{
+                  marginTop: 14, borderRadius: 10, padding: "12px 16px",
+                  background: verifyResult.chain_valid && verifyResult.hmac_valid ? "rgba(0,194,168,0.07)" : "rgba(239,68,68,0.07)",
+                  border: `1px solid ${verifyResult.chain_valid && verifyResult.hmac_valid ? "rgba(0,194,168,0.25)" : "rgba(239,68,68,0.25)"}`,
+                  display: "flex", alignItems: "center", gap: 12,
+                }}>
+                  {verifyResult.chain_valid && verifyResult.hmac_valid
+                    ? <CheckCircle size={18} color="#00c2a8" />
+                    : <XCircle size={18} color="#ef4444" />
+                  }
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: verifyResult.chain_valid && verifyResult.hmac_valid ? "#00c2a8" : "#ef4444" }}>
+                      {verifyResult.chain_valid && verifyResult.hmac_valid
+                        ? "Chain intact — cryptographic integrity confirmed"
+                        : "Integrity violation detected"
+                      }
+                    </div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                      {verifyResult.event_count} event{verifyResult.event_count !== 1 ? "s" : ""} verified in this session
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <HashChip ok={verifyResult.chain_valid} label="Hash chain" />
+                    <HashChip ok={verifyResult.hmac_valid} label="HMAC" />
+                  </div>
+                </div>
+              )}
+
+              {/* Proof viewer */}
+              {proof && proofOpen && (
+                <div style={{ marginTop: 14 }}>
+                  <button
+                    onClick={() => setProofOpen(o => !o)}
+                    style={{
+                      background: "none", border: "none", cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 6,
+                      fontSize: 11, fontWeight: 700, color: "#64748b",
+                      padding: "4px 0", marginBottom: 10,
+                      fontFamily: "'Raleway', sans-serif",
+                    }}
+                  >
+                    <ChevronDown size={13} />
+                    Full proof — {proof.event_count} event{proof.event_count !== 1 ? "s" : ""}
+                  </button>
+                  <ProofViewer proof={proof} />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── CTA: Use full app */}
+        {org && (
+          <div style={{
+            ...card({ borderColor: "rgba(0,194,168,0.2)", background: "rgba(0,194,168,0.04)" }),
+            padding: "24px 28px",
+            display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap",
+          }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)", marginBottom: 6 }}>
+                Your demo workspace is ready for the full experience
+              </div>
+              <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>
+                Your API key is already saved. Sign in to access the Audit Trail Explorer,
+                real-time usage dashboard, Stripe billing, and the admin portal.
+              </div>
+            </div>
+            <Link
+              href="/dashboard"
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "12px 22px", borderRadius: 10, textDecoration: "none",
+                background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
+                color: "#070c17", fontSize: 13, fontWeight: 800,
+                fontFamily: "'Raleway', sans-serif",
+                boxShadow: "0 0 24px rgba(0,194,168,0.3)",
+                flexShrink: 0,
+              }}
+            >
+              Open Full Dashboard
+              <ArrowRight size={14} />
+            </Link>
+          </div>
+        )}
+      </div>
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes slideIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+        input::placeholder { color: #334155; }
+        a:hover { opacity: 0.85; }
+      `}</style>
+    </div>
+  );
+}

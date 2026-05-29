@@ -1,4 +1,4 @@
-import { Switch, Route, Router as WouterRouter, Redirect } from "wouter";
+import { Switch, Route, Router as WouterRouter, Redirect, Link } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -15,6 +15,7 @@ import Proof from "@/pages/proof";
 import Billing from "@/pages/billing";
 import AdminPage from "@/pages/admin";
 import AuditPage from "@/pages/audit";
+import TryPage from "@/pages/try";
 import { useApiKey } from "@/hooks/use-nhid";
 import { ApiError } from "@/lib/api";
 
@@ -48,6 +49,7 @@ function ProtectedRoute({ component: Component, ...rest }: any) {
 }
 
 function LoginScreen() {
+  // "Try Demo" link visible on the login screen
   const { login } = useAuth();
   return (
     <div
@@ -128,15 +130,31 @@ function LoginScreen() {
         Log in to continue
       </button>
 
-      <p
-        style={{
-          color: "#334155",
-          fontSize: "0.8rem",
-          marginTop: "2rem",
-        }}
-      >
+      <p style={{ color: "#334155", fontSize: "0.8rem", marginTop: "1.5rem" }}>
         Secure single sign-on
       </p>
+
+      <a
+        href="try"
+        style={{
+          marginTop: "0.75rem",
+          display: "inline-flex", alignItems: "center", gap: 6,
+          padding: "0.55rem 1.2rem",
+          borderRadius: 8,
+          background: "rgba(0,194,168,0.08)",
+          border: "1px solid rgba(0,194,168,0.22)",
+          color: "#00c2a8",
+          fontSize: "0.8rem",
+          fontWeight: 700,
+          textDecoration: "none",
+          letterSpacing: "0.01em",
+          transition: "opacity 0.15s",
+        }}
+        onMouseOver={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "0.8")}
+        onMouseOut={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "1")}
+      >
+        ⚡ Try without an account
+      </a>
     </div>
   );
 }
@@ -187,6 +205,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 function Router() {
   return (
     <Switch>
+      {/* Public demo — no auth required */}
+      <Route path="/try" component={TryPage} />
+      <Route path="/demo" component={TryPage} />
+
       {/* Admin portal — standalone, no shared layout, no auth gate */}
       <Route path="/admin" component={AdminPage} />
 

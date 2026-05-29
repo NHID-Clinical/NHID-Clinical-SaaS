@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Shield, Search, BarChart2,
-  X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard, ShieldCheck,
+  X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard, ShieldCheck, Zap,
 } from "lucide-react";
 import { useApiKey } from "@/hooks/use-nhid";
 import { useAuth } from "@workspace/replit-auth-web";
@@ -255,8 +255,32 @@ function SidebarContent({
           );
         })}
 
-        {/* Admin link */}
+        {/* Try Demo */}
         <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+          <Link
+            href="/try"
+            onClick={onClose}
+            style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "9px 12px", borderRadius: 9, marginBottom: 2,
+              textDecoration: "none",
+              background: "rgba(0,194,168,0.07)",
+              border: "1px solid rgba(0,194,168,0.18)",
+              color: "#00c2a8",
+              transition: "all 0.15s ease",
+              cursor: "pointer",
+            }}
+          >
+            <Zap size={14} style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 700 }}>Try Demo</div>
+              <div style={{ fontSize: 9, opacity: 0.6, marginTop: 1 }}>No account needed</div>
+            </div>
+          </Link>
+        </div>
+
+        {/* Admin link */}
+        <div style={{ marginTop: 2, paddingTop: 2 }}>
           <Link
             href="/admin"
             onClick={onClose}
