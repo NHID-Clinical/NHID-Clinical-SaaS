@@ -12,7 +12,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "daily_limit": 100,
         "monthly_limit": 1_000,
         "rate_limit_rpm": 10,
-        "features": ["audit_trail", "basic_proof"],
+        "features": ["audit_trail", "basic_proof", "simulated_voice"],
         "price_usd": 0,
         "stripe_plan": False,
     },
@@ -21,7 +21,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "daily_limit": 10_000,
         "monthly_limit": 200_000,
         "rate_limit_rpm": 100,
-        "features": ["audit_trail", "basic_proof", "replay", "policy_engine", "api_access"],
+        "features": ["audit_trail", "basic_proof", "replay", "policy_engine", "api_access", "simulated_voice"],
         "price_usd": 99,
         "stripe_plan": True,
     },
@@ -32,7 +32,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "rate_limit_rpm": 500,
         "features": [
             "audit_trail", "basic_proof", "replay", "policy_engine",
-            "api_access", "sso_ready", "priority_support",
+            "api_access", "sso_ready", "priority_support", "voice_webhook",
         ],
         "price_usd": 499,
         "stripe_plan": True,
@@ -44,12 +44,15 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "rate_limit_rpm": 2_000,
         "features": [
             "audit_trail", "basic_proof", "replay", "policy_engine",
-            "api_access", "sso", "enterprise_sla", "dedicated_support",
+            "api_access", "sso", "enterprise_sla", "dedicated_support", "voice_webhook",
         ],
         "price_usd": 2_500,
         "stripe_plan": True,
     },
 }
+
+# Plans that include live voice webhook integrations (Retell, Vapi, Twilio, etc.)
+_VOICE_WEBHOOK_PLANS: frozenset = frozenset({"l2", "l3"})
 
 # Keep legacy aliases so existing orgs created with old plan names still work
 _ALIAS: Dict[str, str] = {
@@ -75,6 +78,12 @@ def check_rate_limit(org_id: str, plan_name: str, today_count: int) -> Dict[str,
         "limit": limit,
         "plan": plan_name,
     }
+
+
+def plan_allows_voice_webhook(plan_name: str) -> bool:
+    """Return True if the plan includes live voice webhook integrations (L2+)."""
+    canonical = _ALIAS.get(plan_name, plan_name)
+    return canonical in _VOICE_WEBHOOK_PLANS
 
 
 def get_upgrade_path(current_plan: str) -> Dict[str, Any]:

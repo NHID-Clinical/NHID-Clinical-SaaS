@@ -49,7 +49,7 @@ from saas_layer.auth import (
     link_org_to_user, get_org_by_user,
 )
 from saas_layer.usage import log_request, get_usage_summary, get_recent_activity, get_global_stats
-from saas_layer.billing import get_plan, check_rate_limit, get_upgrade_path
+from saas_layer.billing import get_plan, check_rate_limit, get_upgrade_path, plan_allows_voice_webhook
 from saas_layer.stripe_billing import (
     check_subscription_gate,
     create_checkout_session,
@@ -1084,6 +1084,16 @@ async def voice_webhook_incoming(
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
 
+    if not plan_allows_voice_webhook(org.get("plan", "free")):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Live voice webhook integrations require an L2 or higher plan. "
+                f"Current plan: '{org.get('plan', 'free')}'. "
+                "Upgrade at /billing to connect Retell, Vapi, Twilio, or other voice platforms."
+            ),
+        )
+
     try:
         body: Dict[str, Any] = await request.json()
     except Exception:
@@ -1170,6 +1180,16 @@ async def voice_webhook_transcript(
     org = validate_api_key(api_key)
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
+
+    if not plan_allows_voice_webhook(org.get("plan", "free")):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Live voice webhook integrations require an L2 or higher plan. "
+                f"Current plan: '{org.get('plan', 'free')}'. "
+                "Upgrade at /billing to connect Retell, Vapi, Twilio, or other voice platforms."
+            ),
+        )
 
     try:
         body: Dict[str, Any] = await request.json()

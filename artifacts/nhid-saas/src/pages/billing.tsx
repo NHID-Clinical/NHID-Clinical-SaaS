@@ -14,9 +14,9 @@ interface Plan {
 const PLAN_ORDER = ["l1", "l2", "l3"];
 
 const PLAN_FEATURES: Record<string, string[]> = {
-  l1: ["10,000 events/day", "100 req/min", "SHA-256 chain proofs", "Email support"],
-  l2: ["100,000 events/day", "500 req/min", "SHA-256 chain proofs", "Priority support", "Usage analytics"],
-  l3: ["Unlimited events", "2,000 req/min", "SHA-256 chain proofs", "Dedicated support", "SLA guarantee", "Custom retention"],
+  l1: ["10,000 events/day", "100 req/min", "SHA-256 chain proofs", "Simulated Voice Testing", "Email support"],
+  l2: ["100,000 events/day", "500 req/min", "SHA-256 chain proofs", "Live Voice Integrations (Retell, Vapi, Twilio)", "Priority support", "Usage analytics"],
+  l3: ["Unlimited events", "2,000 req/min", "SHA-256 chain proofs", "Live Voice Integrations (Retell, Vapi, Twilio)", "Dedicated support", "SLA guarantee", "Custom retention"],
 };
 
 const PLAN_ICONS: Record<string, React.ElementType> = {
@@ -112,7 +112,7 @@ export default function Billing() {
           </h1>
         </div>
         <p style={{ margin: 0, fontSize: 12, color: "var(--nhid-muted)" }}>
-          Upgrade your plan to unlock higher event limits and priority support.
+          Upgrade your plan to unlock higher event limits, priority support, and live voice platform integrations (Retell, Vapi, Twilio) on L2+.
         </p>
       </div>
 

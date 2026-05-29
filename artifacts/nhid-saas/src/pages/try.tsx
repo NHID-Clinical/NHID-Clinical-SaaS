@@ -676,6 +676,9 @@ export default function TryPage() {
 
   const hasSentEvents = sentEvents.length > 0;
 
+  // ── Plan capabilities
+  const canUseVoiceWebhooks = !!org && !["free", "l1"].includes((org.plan || "free").toLowerCase());
+
   // ── Layout helpers
   const card = (style: React.CSSProperties = {}) => ({
     background: "rgba(255,255,255,0.025)",
@@ -1147,8 +1150,19 @@ export default function TryPage() {
                 <Phone size={13} color={voiceTurns.length > 0 ? "#00c2a8" : "#64748b"} />
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)" }}>
-                  Simulate Voice Call
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)" }}>
+                    Simulate Voice Call
+                  </span>
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+                    padding: "2px 7px", borderRadius: 5,
+                    background: "rgba(0,194,168,0.1)", color: "#00c2a8",
+                    border: "1px solid rgba(0,194,168,0.25)",
+                    textTransform: "uppercase",
+                  }}>
+                    Free · Simulated
+                  </span>
                 </div>
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
                   6-turn scripted call with real-time policy enforcement logged to the audit trail
@@ -1351,25 +1365,93 @@ export default function TryPage() {
                 <Link2 size={13} color={webhookTurns.length > 0 ? "#53d8fb" : "#64748b"} />
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)" }}>
-                  Webhook Integration
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)" }}>
+                    Live Voice Webhook Integration
+                  </span>
+                  {!canUseVoiceWebhooks && (
+                    <span style={{
+                      fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+                      padding: "2px 7px", borderRadius: 5,
+                      background: "rgba(251,189,36,0.1)", color: "#fbbd24",
+                      border: "1px solid rgba(251,189,36,0.25)",
+                      textTransform: "uppercase", display: "flex", alignItems: "center", gap: 4,
+                    }}>
+                      <Lock size={8} />
+                      L2+ Required
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
                   Connect Retell AI, Vapi, or Twilio — payloads auto-detected and normalised
                 </div>
               </div>
-              <span style={{
-                fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
-                padding: "3px 8px", borderRadius: 5,
-                background: "rgba(83,216,251,0.1)", color: "#53d8fb",
-                border: "1px solid rgba(83,216,251,0.2)", marginRight: 8,
-              }}>
-                INTEGRATION
-              </span>
+              {canUseVoiceWebhooks && (
+                <span style={{
+                  fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+                  padding: "3px 8px", borderRadius: 5,
+                  background: "rgba(83,216,251,0.1)", color: "#53d8fb",
+                  border: "1px solid rgba(83,216,251,0.2)", marginRight: 8,
+                }}>
+                  INTEGRATION
+                </span>
+              )}
               {webhookOpen ? <ChevronDown size={16} color="#475569" /> : <ChevronRight size={16} color="#475569" />}
             </button>
 
-            {webhookOpen && (
+            {webhookOpen && !canUseVoiceWebhooks && (
+              <div style={{ padding: "20px 22px 24px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                <div style={{
+                  borderRadius: 12, padding: "24px 22px",
+                  background: "rgba(251,189,36,0.04)", border: "1px solid rgba(251,189,36,0.15)",
+                  display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 14,
+                }}>
+                  <div style={{
+                    width: 44, height: 44, borderRadius: "50%",
+                    background: "rgba(251,189,36,0.1)", border: "1px solid rgba(251,189,36,0.25)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    <Lock size={18} color="#fbbd24" />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "var(--nhid-text)", marginBottom: 6 }}>
+                      Live Voice Integrations require L2+
+                    </div>
+                    <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, maxWidth: 380 }}>
+                      Connect real voice platforms — Retell AI, Vapi, Twilio, Bandwidth, JustCall —
+                      and route live calls through NHID's governance layer. Available on L2 and above.
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                    {["Retell AI", "Vapi", "Twilio", "Bandwidth", "JustCall"].map(name => (
+                      <span key={name} style={{
+                        fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 99,
+                        background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+                        color: "#475569",
+                      }}>
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                  <Link
+                    href="/dashboard"
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 7,
+                      padding: "10px 22px", borderRadius: 9, textDecoration: "none",
+                      background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
+                      color: "#070c17", fontSize: 13, fontWeight: 800,
+                      fontFamily: "'Raleway', sans-serif",
+                      boxShadow: "0 0 20px rgba(0,194,168,0.25)",
+                    }}
+                  >
+                    Sign in to upgrade
+                    <ArrowRight size={13} />
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {webhookOpen && canUseVoiceWebhooks && (
               <div style={{ padding: "0 22px 22px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
 
                 {/* Provider tabs */}

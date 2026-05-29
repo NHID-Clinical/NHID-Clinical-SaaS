@@ -584,3 +584,172 @@ class TestRulesetPolicyEngine:
         legacy_result = run_voice_policy(phrase, self._CONFIRMED)
         explicit_none_result = run_voice_policy(phrase, self._CONFIRMED, ruleset=None)
         assert legacy_result["action"] == explicit_none_result["action"] == "escalate"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Plan-gate tests: voice webhook endpoints require L2+
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RETELL_INCOMING_PAYLOAD = {
+    "call_id": "retell_test_abc123",
+    "event": "call_started",
+    "from_number": "+15550001111",
+}
+
+_FAKE_FREE_ORG = {
+    "org_id": "test-plangate-free",
+    "org_name": "Free Plan Org",
+    "plan": "free",
+    "status": "active",
+    "billing_active": True,
+}
+
+_FAKE_L1_ORG = {
+    "org_id": "test-plangate-l1",
+    "org_name": "L1 Plan Org",
+    "plan": "l1",
+    "status": "active",
+    "billing_active": True,
+}
+
+_FAKE_L2_ORG = {
+    "org_id": "test-plangate-l2",
+    "org_name": "L2 Plan Org",
+    "plan": "l2",
+    "status": "active",
+    "billing_active": True,
+}
+
+_FAKE_L3_ORG = {
+    "org_id": "test-plangate-l3",
+    "org_name": "L3 Plan Org",
+    "plan": "l3",
+    "status": "active",
+    "billing_active": True,
+}
+
+
+def _make_webhook_client(fake_org: dict) -> TestClient:
+    """
+    Build a TestClient that fakes api_key auth for the webhook endpoints.
+    The webhook endpoints call validate_api_key(api_key) directly rather than
+    using get_current_org(), so we patch at the module level.
+    """
+    return TestClient(app)
+
+
+class TestVoiceWebhookPlanGate:
+    """
+    Verify that /saas/voice/webhook/incoming and /saas/voice/webhook/transcript
+    return 403 for free and L1 orgs, and allow L2/L3 orgs through.
+    """
+
+    _INCOMING_PATH = "/saas/voice/webhook/incoming"
+    _TRANSCRIPT_PATH = "/saas/voice/webhook/transcript"
+    _FAKE_KEY = "test_api_key_plangate"
+
+    def _post_incoming(self, fake_org: dict, payload: dict = None):
+        if payload is None:
+            payload = _RETELL_INCOMING_PAYLOAD
+        with patch("saas_layer.gateway.validate_api_key", return_value=fake_org):
+            return TestClient(app).post(
+                f"{self._INCOMING_PATH}?api_key={self._FAKE_KEY}",
+                json=payload,
+            )
+
+    def _post_transcript(self, fake_org: dict, payload: dict = None):
+        if payload is None:
+            payload = {"session_id": "some-session", "transcript_text": "Hello", "turn_number": 1}
+        with patch("saas_layer.gateway.validate_api_key", return_value=fake_org):
+            return TestClient(app).post(
+                f"{self._TRANSCRIPT_PATH}?api_key={self._FAKE_KEY}",
+                json=payload,
+            )
+
+    # ── /webhook/incoming plan gate ──────────────────────────────────────────
+
+    def test_free_org_blocked_on_webhook_incoming(self):
+        r = self._post_incoming(_FAKE_FREE_ORG)
+        assert r.status_code == 403
+        assert "L2" in r.json()["detail"]
+
+    def test_l1_org_blocked_on_webhook_incoming(self):
+        r = self._post_incoming(_FAKE_L1_ORG)
+        assert r.status_code == 403
+        assert "L2" in r.json()["detail"]
+
+    def test_l2_org_passes_plan_gate_on_webhook_incoming(self):
+        """L2 org must pass the plan gate — may still fail later (DB/session), but not with 403."""
+        with (
+            patch("saas_layer.gateway.validate_api_key", return_value=_FAKE_L2_ORG),
+            patch("saas_layer.gateway.create_voice_session"),
+            patch("saas_layer.gateway.audit_svc.append_trace", return_value=_MOCK_AUDIT_RETURN),
+            patch("saas_layer.gateway.nhid_client.append_event"),
+            patch("saas_layer.gateway.log_request"),
+        ):
+            r = TestClient(app).post(
+                f"{self._INCOMING_PATH}?api_key={self._FAKE_KEY}",
+                json=_RETELL_INCOMING_PAYLOAD,
+            )
+        assert r.status_code != 403, f"L2 org must not be blocked by the plan gate; got {r.status_code}"
+
+    def test_l3_org_passes_plan_gate_on_webhook_incoming(self):
+        """L3 org must pass the plan gate."""
+        with (
+            patch("saas_layer.gateway.validate_api_key", return_value=_FAKE_L3_ORG),
+            patch("saas_layer.gateway.create_voice_session"),
+            patch("saas_layer.gateway.audit_svc.append_trace", return_value=_MOCK_AUDIT_RETURN),
+            patch("saas_layer.gateway.nhid_client.append_event"),
+            patch("saas_layer.gateway.log_request"),
+        ):
+            r = TestClient(app).post(
+                f"{self._INCOMING_PATH}?api_key={self._FAKE_KEY}",
+                json=_RETELL_INCOMING_PAYLOAD,
+            )
+        assert r.status_code != 403, f"L3 org must not be blocked by the plan gate; got {r.status_code}"
+
+    def test_missing_api_key_returns_401_on_webhook_incoming(self):
+        r = TestClient(app).post(self._INCOMING_PATH, json=_RETELL_INCOMING_PAYLOAD)
+        assert r.status_code == 401
+
+    def test_invalid_api_key_returns_401_on_webhook_incoming(self):
+        with patch("saas_layer.gateway.validate_api_key", return_value=None):
+            r = TestClient(app).post(
+                f"{self._INCOMING_PATH}?api_key=bad_key",
+                json=_RETELL_INCOMING_PAYLOAD,
+            )
+        assert r.status_code == 401
+
+    # ── /webhook/transcript plan gate ────────────────────────────────────────
+
+    def test_free_org_blocked_on_webhook_transcript(self):
+        r = self._post_transcript(_FAKE_FREE_ORG)
+        assert r.status_code == 403
+        assert "L2" in r.json()["detail"]
+
+    def test_l1_org_blocked_on_webhook_transcript(self):
+        r = self._post_transcript(_FAKE_L1_ORG)
+        assert r.status_code == 403
+        assert "L2" in r.json()["detail"]
+
+    def test_l2_org_passes_plan_gate_on_webhook_transcript(self):
+        """L2 org passes the plan gate — expected to fail at session lookup (404), not gate (403)."""
+        r = self._post_transcript(_FAKE_L2_ORG)
+        assert r.status_code != 403, f"L2 org must not be blocked by the plan gate; got {r.status_code}"
+
+    def test_l3_org_passes_plan_gate_on_webhook_transcript(self):
+        """L3 org passes the plan gate."""
+        r = self._post_transcript(_FAKE_L3_ORG)
+        assert r.status_code != 403, f"L3 org must not be blocked by the plan gate; got {r.status_code}"
+
+    def test_missing_api_key_returns_401_on_webhook_transcript(self):
+        r = TestClient(app).post(self._TRANSCRIPT_PATH, json={"session_id": "x", "transcript_text": "hi"})
+        assert r.status_code == 401
+
+    def test_invalid_api_key_returns_401_on_webhook_transcript(self):
+        with patch("saas_layer.gateway.validate_api_key", return_value=None):
+            r = TestClient(app).post(
+                f"{self._TRANSCRIPT_PATH}?api_key=bad_key",
+                json={"session_id": "x", "transcript_text": "hi"},
+            )
+        assert r.status_code == 401
