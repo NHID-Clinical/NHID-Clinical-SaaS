@@ -196,21 +196,21 @@ def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
 
     if webhook_secret:
         import stripe as _stripe
-        client = _stripe.StripeClient(os.environ.get("STRIPE_SECRET_KEY", ""))
-        event = client.construct_event(payload, sig_header, webhook_secret)
-        event_id = event.get("id", "")
-        event_type = event["type"]
-        data_object = event["data"]["object"]
+        # Verify signature only — raises SignatureVerificationError if invalid.
+        # Discard the StripeObject return value and use plain JSON for data
+        # access to avoid StripeObject attribute quirks in stripe-python v15.
+        _stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     else:
         import warnings
         warnings.warn(
             "STRIPE_WEBHOOK_SECRET not set — skipping signature verification (dev only).",
             stacklevel=2,
         )
-        parsed = json.loads(payload)
-        event_id = parsed.get("id", "")
-        event_type = parsed.get("type", "")
-        data_object = parsed.get("data", {}).get("object", {})
+
+    parsed = json.loads(payload)
+    event_id = parsed.get("id", "")
+    event_type = parsed.get("type", "")
+    data_object = parsed.get("data", {}).get("object", {})
 
     _logger.info("STRIPE_WEBHOOK_RECEIVED event_type=%s event_id=%s", event_type, event_id)
 
@@ -237,8 +237,8 @@ def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
 def _handle_checkout_completed(session: Dict) -> None:
     org_id = session.get("metadata", {}).get("nhid_org_id")
     plan = session.get("metadata", {}).get("nhid_plan")
-    subscription_id = session.get("subscription")
-    customer_id = session.get("customer")
+    subscription_id = session["subscription"]
+    customer_id = session["customer"]
     if not org_id:
         return
     _update_org_stripe(
@@ -251,7 +251,7 @@ def _handle_checkout_completed(session: Dict) -> None:
 
 
 def _handle_invoice_paid(invoice: Dict) -> None:
-    subscription_id = invoice.get("subscription")
+    subscription_id = invoice["subscription"]
     if not subscription_id:
         return
     client = get_stripe_client()
@@ -272,8 +272,8 @@ def _handle_invoice_paid(invoice: Dict) -> None:
 
 
 def _handle_subscription_deleted(subscription: Dict) -> None:
-    subscription_id = subscription.get("id")
-    org_id = subscription.get("metadata", {}).get("nhid_org_id")
+    subscription_id = subscription["id"]
+    org_id = subscription["metadata"]["nhid_org_id"] if subscription["metadata"] else None
     if org_id:
         _update_org_stripe(org_id, status="canceled", plan="free")
     elif subscription_id:
@@ -288,7 +288,7 @@ def _handle_subscription_deleted(subscription: Dict) -> None:
 
 
 def _handle_subscription_updated(subscription: Dict) -> None:
-    org_id = subscription.get("metadata", {}).get("nhid_org_id")
+    org_id = subscription["metadata"]["nhid_org_id"] if subscription["metadata"] else None
     status_map = {
         "active": "active",
         "past_due": "past_due",
@@ -298,7 +298,7 @@ def _handle_subscription_updated(subscription: Dict) -> None:
         "trialing": "active",
         "unpaid": "past_due",
     }
-    stripe_status = subscription.get("status", "")
+    stripe_status = subscription["status"]
     status = status_map.get(stripe_status, "past_due")
     if org_id:
         _update_org_stripe(org_id, status=status)
@@ -347,8 +347,8 @@ def check_subscription_gate(org: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     Blocks ANY org with status != 'active' (free or paid).
     Free orgs at 'active' status pass unconditionally (usage limits via billing.py).
     """
-    status = org.get("status", "active")
-    plan = org.get("plan", "free")
+    status = org["status"]
+    plan = org["plan"]
     org_id = org.get("org_id", "?")
 
     if status != "active":
