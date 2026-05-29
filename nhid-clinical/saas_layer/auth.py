@@ -95,6 +95,19 @@ def init_db() -> None:
                     ON audit_traces (org_id, session_id, seq_num)
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS voice_sessions (
+                    session_id           TEXT PRIMARY KEY,
+                    org_id               TEXT NOT NULL,
+                    disclosure_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+                    escalated            BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_vs_org
+                    ON voice_sessions (org_id)
+            """)
+            cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_usage_org
                     ON usage_log (org_id, timestamp)
             """)

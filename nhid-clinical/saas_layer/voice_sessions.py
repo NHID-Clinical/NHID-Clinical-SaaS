@@ -1,0 +1,104 @@
+"""
+saas_layer/voice_sessions.py — PostgreSQL-backed voice session state.
+
+Replaces the in-memory _voice_sessions dict in gateway.py.
+All operations use get_conn() from db.py and are safe across restarts
+and multiple Uvicorn workers.
+
+Transactional read-modify-write pattern (used by voice_transcript):
+    conn = get_conn()
+    try:
+        with conn:  # auto-commit on clean exit, rollback on exception
+            row = get_voice_session_for_update(conn, session_id)
+            # ... validate, run policy, write audit ...
+            update_voice_session_in_tx(conn, session_id, new_disclosure, new_escalated)
+        # transaction committed here
+    finally:
+        conn.close()
+
+SELECT ... FOR UPDATE serialises concurrent requests for the same session_id
+so no two workers can make conflicting policy decisions simultaneously.
+"""
+from typing import Dict, Any, Optional
+from saas_layer.db import get_conn
+
+
+def create_voice_session(session_id: str, org_id: str) -> None:
+    """
+    Insert a new voice session row with default state.
+    Raises if the session_id already exists (primary key violation).
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO voice_sessions (session_id, org_id, disclosure_confirmed, escalated)
+                VALUES (%s, %s, FALSE, FALSE)
+                """,
+                (session_id, org_id),
+            )
+    finally:
+        conn.close()
+
+
+def get_voice_session_for_update(
+    conn,
+    session_id: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    SELECT the session row with a row-level lock (FOR UPDATE) within *conn*'s
+    current transaction. Blocks concurrent callers for the same session_id until
+    the transaction commits or rolls back.
+
+    Returns the row as a dict, or None if not found.
+    Must be called inside an active ``with conn:`` block managed by the caller.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT session_id, org_id, disclosure_confirmed, escalated, created_at "
+        "FROM voice_sessions WHERE session_id = %s FOR UPDATE",
+        (session_id,),
+    )
+    row = cur.fetchone()
+    return dict(row) if row is not None else None
+
+
+def update_voice_session_in_tx(
+    conn,
+    session_id: str,
+    disclosure_confirmed: bool,
+    escalated: bool,
+) -> None:
+    """
+    UPDATE the mutable state columns within *conn*'s current transaction.
+    Must be called inside the same ``with conn:`` block as get_voice_session_for_update.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE voice_sessions
+        SET disclosure_confirmed = %s,
+            escalated            = %s
+        WHERE session_id = %s
+        """,
+        (disclosure_confirmed, escalated, session_id),
+    )
+
+
+def delete_voice_session(session_id: str) -> None:
+    """
+    Delete a voice session row.  Used for failure compensation in voice_incoming
+    when the audit trace write fails after the session row has already been inserted.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM voice_sessions WHERE session_id = %s",
+                (session_id,),
+            )
+    finally:
+        conn.close()

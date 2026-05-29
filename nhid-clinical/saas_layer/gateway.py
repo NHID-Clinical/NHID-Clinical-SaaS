@@ -58,19 +58,24 @@ from saas_layer.stripe_client import get_publishable_key
 from saas_layer import audit as audit_svc
 from saas_layer.voice_policy import run_voice_policy
 from saas_layer import voice_policy_store
+from saas_layer.voice_sessions import (
+    create_voice_session,
+    delete_voice_session,
+    get_voice_session_for_update,
+    update_voice_session_in_tx,
+)
+from saas_layer.db import get_conn
 
 # NHID core is accessed via direct Python import (no Bridge HTTP dependency).
 from saas_layer import nhid_client
 
-# ── Voice session state ────────────────────────────────────────────────────────
-# In-memory per-call state keyed by session_id.
-# Not persisted — lives for the duration of the process.
-_voice_sessions: Dict[str, Dict] = {}
-_voice_lock = threading.Lock()
-# Maps provider call_id (Retell/Vapi/Twilio) → NHID session_id.
-# Protected by _voice_lock. Allows /webhook/transcript to look up sessions
+# Maps provider call_id (Retell/Vapi/Twilio) → NHID session_id (in-memory).
+# Protected by _call_id_lock. Allows /webhook/transcript to look up sessions
 # using the provider's own call identifier instead of our internal UUID.
+# Voice session state itself is persisted to PostgreSQL (voice_sessions table).
 _call_id_map: Dict[str, str] = {}
+_call_id_lock = threading.Lock()
+
 
 _ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
 
@@ -668,12 +673,7 @@ async def voice_incoming(body: VoiceIncomingRequest, org: Dict = Depends(get_cur
     and returns the required opening disclosure script.
     """
     session_id = str(uuid.uuid4())
-    with _voice_lock:
-        _voice_sessions[session_id] = {
-            "disclosure_confirmed": False,
-            "escalated": False,
-            "org_id": org["org_id"],
-        }
+    create_voice_session(session_id, org["org_id"])
 
     event = {
         "event_type": "voice_session_start",
@@ -695,8 +695,10 @@ async def voice_incoming(body: VoiceIncomingRequest, org: Dict = Depends(get_cur
     except Exception as exc:
         _logger.error("voice_incoming audit_svc.append_trace FAILED org=%s session=%s: %s",
                       org["org_id"], session_id, exc)
-        with _voice_lock:
-            _voice_sessions.pop(session_id, None)
+        try:
+            delete_voice_session(session_id)
+        except Exception as del_exc:
+            _logger.warning("voice_incoming cleanup failed for session=%s: %s", session_id, del_exc)
         raise HTTPException(
             status_code=500,
             detail="Audit trace write failed. Voice session was not recorded in the tamper-evident log.",
@@ -721,66 +723,84 @@ async def voice_transcript(body: VoiceTranscriptRequest, org: Dict = Depends(get
     Appends the enforcement decision to the tamper-evident audit trail.
     Returns action, reason_code, session_id, and event_hash.
     """
-    with _voice_lock:
-        session_state = _voice_sessions.get(body.session_id)
-        if session_state is None:
-            raise HTTPException(status_code=404, detail=f"Voice session '{body.session_id}' not found.")
-        if session_state.get("org_id") != org["org_id"]:
-            raise HTTPException(status_code=403, detail="Voice session does not belong to your organisation.")
-        state_snapshot = dict(session_state)
-
-    org_policy = voice_policy_store.get_effective_policy(org["org_id"])
-    decision = run_voice_policy(
-        body.transcript_text,
-        state_snapshot,
-        ruleset=org_policy["rules"],
-        policy_version=org_policy["version"],
-    )
-    action = decision["action"]
-    reason_code = decision["reason_code"]
-    policy_version = decision["policy_version"]
-
-    event = {
-        "event_type": "voice_transcript",
-        "state_before": "active",
-        "state_after": "escalated" if action == "escalate" else "active",
-        "input_text": body.transcript_text[:500],
-        "policy_action": action,
-        "reason_code": reason_code,
-        "response_text": None,
-        "policy_version": policy_version,
-    }
-
+    # ── Transactional read-modify-write ──────────────────────────────────────
+    # Open a single connection and hold it open for the full operation.
+    # SELECT ... FOR UPDATE serialises concurrent requests for the same session,
+    # guaranteeing that policy evaluation and state update are atomic.
+    conn = get_conn()
     try:
-        nhid_client.append_event(
-            body.session_id, [event],
-            f"voice:transcript:{body.session_id}:{body.turn_number}",
-        )
-    except nhid_client.NHIDClientError as exc:
-        _logger.warning("voice_transcript nhid append skipped: %s", exc)
+        with conn:
+            # Lock the row for the duration of this transaction.
+            session_state = get_voice_session_for_update(conn, body.session_id)
+            if session_state is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Voice session '{body.session_id}' not found.",
+                )
+            if session_state["org_id"] != org["org_id"]:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Voice session does not belong to your organisation.",
+                )
 
-    try:
-        result = audit_svc.append_trace(
-            org_id=org["org_id"],
-            session_id=body.session_id,
-            event=event,
-        )
-        event_hash = result.get("event_hash", "")
-    except Exception as exc:
-        _logger.error("voice_transcript audit_svc.append_trace FAILED org=%s session=%s: %s",
-                      org["org_id"], body.session_id, exc)
-        raise HTTPException(
-            status_code=500,
-            detail="Audit trace write failed. Enforcement decision was not recorded in the tamper-evident log.",
-        )
+            org_policy = voice_policy_store.get_effective_policy(org["org_id"])
+            decision = run_voice_policy(
+                body.transcript_text,
+                session_state,
+                ruleset=org_policy["rules"],
+                policy_version=org_policy["version"],
+            )
+            action = decision["action"]
+            reason_code = decision["reason_code"]
+            policy_version = decision["policy_version"]
 
-    with _voice_lock:
-        if body.session_id in _voice_sessions:
+            event = {
+                "event_type": "voice_transcript",
+                "state_before": "active",
+                "state_after": "escalated" if action == "escalate" else "active",
+                "input_text": body.transcript_text[:500],
+                "policy_action": action,
+                "reason_code": reason_code,
+                "response_text": None,
+                "policy_version": policy_version,
+            }
+
+            try:
+                nhid_client.append_event(
+                    body.session_id, [event],
+                    f"voice:transcript:{body.session_id}:{body.turn_number}",
+                )
+            except nhid_client.NHIDClientError as exc:
+                _logger.warning("voice_transcript nhid append skipped: %s", exc)
+
+            try:
+                result = audit_svc.append_trace(
+                    org_id=org["org_id"],
+                    session_id=body.session_id,
+                    event=event,
+                )
+                event_hash = result.get("event_hash", "")
+            except Exception as exc:
+                _logger.error(
+                    "voice_transcript audit_svc.append_trace FAILED org=%s session=%s: %s",
+                    org["org_id"], body.session_id, exc,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Audit trace write failed. Enforcement decision was not recorded in the tamper-evident log.",
+                )
+
+            new_disclosure = session_state["disclosure_confirmed"]
+            new_escalated = session_state["escalated"]
             if action in ("allow", "disclose"):
-                _voice_sessions[body.session_id]["disclosure_confirmed"] = True
+                new_disclosure = True
             elif action == "escalate":
-                _voice_sessions[body.session_id]["disclosure_confirmed"] = True
-                _voice_sessions[body.session_id]["escalated"] = True
+                new_disclosure = True
+                new_escalated = True
+            update_voice_session_in_tx(conn, body.session_id, new_disclosure, new_escalated)
+            # transaction commits here on clean `with conn:` exit
+    finally:
+        conn.close()
 
     log_request(org["org_id"], "/saas/voice/transcript", "POST", 200, body.session_id)
     return {
@@ -1018,13 +1038,9 @@ async def voice_webhook_incoming(
     provider_call_id = norm.get("provider_call_id")
 
     session_id = str(uuid.uuid4())
-    with _voice_lock:
-        _voice_sessions[session_id] = {
-            "disclosure_confirmed": False,
-            "escalated": False,
-            "org_id": org["org_id"],
-        }
-        if provider_call_id:
+    create_voice_session(session_id, org["org_id"])
+    if provider_call_id:
+        with _call_id_lock:
             _call_id_map[provider_call_id] = session_id
 
     event = {
@@ -1047,9 +1063,12 @@ async def voice_webhook_incoming(
     except Exception as exc:
         _logger.error("voice_webhook_incoming audit FAILED org=%s session=%s: %s",
                       org["org_id"], session_id, exc)
-        with _voice_lock:
-            _voice_sessions.pop(session_id, None)
-            if provider_call_id:
+        try:
+            delete_voice_session(session_id)
+        except Exception as del_exc:
+            _logger.warning("voice_webhook_incoming cleanup failed session=%s: %s", session_id, del_exc)
+        if provider_call_id:
+            with _call_id_lock:
                 _call_id_map.pop(provider_call_id, None)
         raise HTTPException(
             status_code=500,
@@ -1106,71 +1125,77 @@ async def voice_webhook_transcript(
     transcript_text: str = norm.get("transcript_text") or ""
     turn_number: int = norm.get("turn_number") or 1
 
-    with _voice_lock:
+    with _call_id_lock:
         if provider_call_id:
             session_id = _call_id_map.get(provider_call_id)
         else:
             session_id = body.get("session_id")
 
-        if not session_id:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"No NHID session found for provider_call_id='{provider_call_id}'. "
-                    "Call POST /saas/voice/webhook/incoming first to register the call."
-                ),
-            )
-        session_state = _voice_sessions.get(session_id)
-        if session_state is None:
-            raise HTTPException(status_code=404, detail=f"Voice session '{session_id}' not found.")
-        if session_state.get("org_id") != org["org_id"]:
-            raise HTTPException(status_code=403, detail="Voice session does not belong to your organisation.")
-        state_snapshot = dict(session_state)
-
-    org_policy = voice_policy_store.get_effective_policy(org["org_id"])
-    decision = run_voice_policy(
-        transcript_text,
-        state_snapshot,
-        ruleset=org_policy["rules"],
-        policy_version=org_policy["version"],
-    )
-    action = decision["action"]
-    reason_code = decision["reason_code"]
-    policy_version = decision["policy_version"]
-
-    event = {
-        "event_type": "voice_transcript",
-        "state_before": "active",
-        "state_after": "escalated" if action == "escalate" else "active",
-        "input_text": transcript_text[:500],
-        "policy_action": action,
-        "reason_code": reason_code,
-        "response_text": None,
-        "policy_version": policy_version,
-    }
-    try:
-        nhid_client.append_event(session_id, [event], f"voice:transcript:{session_id}:{turn_number}")
-    except nhid_client.NHIDClientError as exc:
-        _logger.warning("voice_webhook_transcript nhid append skipped: %s", exc)
-
-    try:
-        result = audit_svc.append_trace(org_id=org["org_id"], session_id=session_id, event=event)
-        event_hash = result.get("event_hash", "")
-    except Exception as exc:
-        _logger.error("voice_webhook_transcript audit FAILED org=%s session=%s: %s",
-                      org["org_id"], session_id, exc)
+    if not session_id:
         raise HTTPException(
-            status_code=500,
-            detail="Audit trace write failed. Enforcement decision was not recorded.",
+            status_code=404,
+            detail=(
+                f"No NHID session found for provider_call_id='{provider_call_id}'. "
+                "Call POST /saas/voice/webhook/incoming first to register the call."
+            ),
         )
 
-    with _voice_lock:
-        if session_id in _voice_sessions:
+    conn = get_conn()
+    try:
+        with conn:
+            session_state = get_voice_session_for_update(conn, session_id)
+            if session_state is None:
+                raise HTTPException(status_code=404, detail=f"Voice session '{session_id}' not found.")
+            if session_state["org_id"] != org["org_id"]:
+                raise HTTPException(status_code=403, detail="Voice session does not belong to your organisation.")
+
+            org_policy = voice_policy_store.get_effective_policy(org["org_id"])
+            decision = run_voice_policy(
+                transcript_text,
+                session_state,
+                ruleset=org_policy["rules"],
+                policy_version=org_policy["version"],
+            )
+            action = decision["action"]
+            reason_code = decision["reason_code"]
+            policy_version = decision["policy_version"]
+
+            event = {
+                "event_type": "voice_transcript",
+                "state_before": "active",
+                "state_after": "escalated" if action == "escalate" else "active",
+                "input_text": transcript_text[:500],
+                "policy_action": action,
+                "reason_code": reason_code,
+                "response_text": None,
+                "policy_version": policy_version,
+            }
+            try:
+                nhid_client.append_event(session_id, [event], f"voice:transcript:{session_id}:{turn_number}")
+            except nhid_client.NHIDClientError as exc:
+                _logger.warning("voice_webhook_transcript nhid append skipped: %s", exc)
+
+            try:
+                result = audit_svc.append_trace(org_id=org["org_id"], session_id=session_id, event=event)
+                event_hash = result.get("event_hash", "")
+            except Exception as exc:
+                _logger.error("voice_webhook_transcript audit FAILED org=%s session=%s: %s",
+                              org["org_id"], session_id, exc)
+                raise HTTPException(
+                    status_code=500,
+                    detail="Audit trace write failed. Enforcement decision was not recorded.",
+                )
+
+            new_disclosure = session_state["disclosure_confirmed"]
+            new_escalated = session_state["escalated"]
             if action in ("allow", "disclose"):
-                _voice_sessions[session_id]["disclosure_confirmed"] = True
+                new_disclosure = True
             elif action == "escalate":
-                _voice_sessions[session_id]["disclosure_confirmed"] = True
-                _voice_sessions[session_id]["escalated"] = True
+                new_disclosure = True
+                new_escalated = True
+            update_voice_session_in_tx(conn, session_id, new_disclosure, new_escalated)
+    finally:
+        conn.close()
 
     log_request(org["org_id"], "/saas/voice/webhook/transcript", "POST", 200, session_id)
     return {
