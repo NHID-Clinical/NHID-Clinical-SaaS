@@ -6,3 +6,4 @@
 - [NHID proof events access bug](nhid-proof-events.md) — proof.trace is `{ events: [...] }` not a flat array; access via `(proof.trace as any)?.events`, not `Array.isArray(proof.trace)`.
 - [SaaS DB now PostgreSQL](saas-postgres-migration.md) — saas_layer fully migrated from SQLite to Replit PostgreSQL; db.py is the single connection module; psycopg2-binary in requirements.txt; %s placeholders; append-only triggers on audit_traces preserved as Postgres functions.
 - [Audit chain concurrent write bug](audit-chain-concurrency.md) — SELECT FOR UPDATE cannot lock non-existent rows; use pg_advisory_xact_lock(hashtext(org_id)) instead to serialize first-insert races.
+- [Public reference vs paid-tier test split](public-reference-split.md) — public NHID-Clinical repo gets only the pure policy engine + pure unit tests; SaaS-coupled & plan-gate tests stay in private NHID-Clinical-SaaS.
