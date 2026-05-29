@@ -41,6 +41,7 @@ interface VoiceSession {
   disclosure_confirmed: boolean;
   escalated: boolean;
   created_at: string;
+  provider: string;
   age_hours: number;
   hours_until_purge: number;
 }
@@ -796,6 +797,7 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                       <tr style={{ background: "rgba(0,0,0,0.15)" }}>
                         <th style={tableHd}>Session ID</th>
                         <th style={tableHd}>Org</th>
+                        <th style={tableHd}>Provider</th>
                         <th style={tableHd}>Disclosure</th>
                         <th style={tableHd}>Escalated</th>
                         <th style={tableHd}>Age</th>
@@ -821,6 +823,15 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                             </td>
                             <td style={{ ...tableTd, ...mono, color: "#7a8fa8", fontSize: 11 }}>
                               {s.org_id.slice(0, 12)}…
+                            </td>
+                            <td style={tableTd}>
+                              <span style={{
+                                fontSize: 11, fontWeight: 600, padding: "2px 8px",
+                                borderRadius: 5, background: "rgba(83,216,251,0.08)",
+                                border: "1px solid rgba(83,216,251,0.15)", color: "#53d8fb",
+                              }}>
+                                {s.provider}
+                              </span>
                             </td>
                             <td style={tableTd}>
                               <span style={{

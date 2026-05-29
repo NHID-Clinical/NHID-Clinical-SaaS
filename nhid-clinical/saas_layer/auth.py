@@ -100,8 +100,13 @@ def init_db() -> None:
                     org_id               TEXT NOT NULL,
                     disclosure_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
                     escalated            BOOLEAN NOT NULL DEFAULT FALSE,
-                    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    provider             TEXT NOT NULL DEFAULT 'api'
                 )
+            """)
+            cur.execute("""
+                ALTER TABLE voice_sessions
+                    ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'api'
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_vs_org

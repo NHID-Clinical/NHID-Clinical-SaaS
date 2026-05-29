@@ -26,9 +26,14 @@ from saas_layer.db import get_conn
 logger = logging.getLogger(__name__)
 
 
-def create_voice_session(session_id: str, org_id: str) -> None:
+def create_voice_session(session_id: str, org_id: str, provider: str = "api") -> None:
     """
     Insert a new voice session row with default state.
+
+    *provider* identifies the telephony integration that originated the call:
+    ``"api"`` (direct REST call), ``"retell"``, ``"vapi"``, ``"twilio"``, or
+    ``"generic"`` (unrecognised webhook payload).
+
     Raises if the session_id already exists (primary key violation).
     """
     conn = get_conn()
@@ -37,10 +42,10 @@ def create_voice_session(session_id: str, org_id: str) -> None:
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO voice_sessions (session_id, org_id, disclosure_confirmed, escalated)
-                VALUES (%s, %s, FALSE, FALSE)
+                INSERT INTO voice_sessions (session_id, org_id, disclosure_confirmed, escalated, provider)
+                VALUES (%s, %s, FALSE, FALSE, %s)
                 """,
-                (session_id, org_id),
+                (session_id, org_id, provider),
             )
     finally:
         conn.close()
@@ -60,7 +65,7 @@ def get_voice_session_for_update(
     """
     cur = conn.cursor()
     cur.execute(
-        "SELECT session_id, org_id, disclosure_confirmed, escalated, created_at "
+        "SELECT session_id, org_id, disclosure_confirmed, escalated, created_at, provider "
         "FROM voice_sessions WHERE session_id = %s FOR UPDATE",
         (session_id,),
     )
@@ -127,7 +132,7 @@ def list_voice_sessions(
             cur = conn.cursor()
             cur.execute(
                 f"""
-                SELECT session_id, org_id, disclosure_confirmed, escalated, created_at
+                SELECT session_id, org_id, disclosure_confirmed, escalated, created_at, provider
                 FROM voice_sessions
                 {where}
                 ORDER BY created_at DESC

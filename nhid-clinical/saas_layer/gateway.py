@@ -730,7 +730,7 @@ async def voice_incoming(body: VoiceIncomingRequest, org: Dict = Depends(get_cur
     and returns the required opening disclosure script.
     """
     session_id = str(uuid.uuid4())
-    create_voice_session(session_id, org["org_id"])
+    create_voice_session(session_id, org["org_id"], provider="api")
 
     event = {
         "event_type": "voice_session_start",
@@ -1095,7 +1095,7 @@ async def voice_webhook_incoming(
     provider_call_id = norm.get("provider_call_id")
 
     session_id = str(uuid.uuid4())
-    create_voice_session(session_id, org["org_id"])
+    create_voice_session(session_id, org["org_id"], provider=provider)
     if provider_call_id:
         with _call_id_lock:
             _call_id_map[provider_call_id] = session_id
@@ -1407,6 +1407,9 @@ async def admin_voice_sessions(
         undisclosed_only=undisclosed_only,
     )
     enriched = [_enrich_with_ttl(s, _VOICE_SESSION_TTL_HOURS) for s in sessions]
+    # Sort by expiry risk: sessions closest to purge appear first so operators
+    # can take action before they are auto-deleted.
+    enriched.sort(key=lambda s: s["hours_until_purge"])
     escalated_count = sum(1 for s in enriched if s.get("escalated"))
     return {
         "sessions": enriched,
@@ -1437,7 +1440,7 @@ async def admin_extend_voice_session(
         with conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT session_id, org_id, disclosure_confirmed, escalated, created_at "
+                "SELECT session_id, org_id, disclosure_confirmed, escalated, created_at, provider "
                 "FROM voice_sessions WHERE session_id = %s",
                 (session_id,),
             )
