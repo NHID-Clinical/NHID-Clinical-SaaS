@@ -15,6 +15,7 @@ import Proof from "@/pages/proof";
 import Billing from "@/pages/billing";
 import AdminPage from "@/pages/admin";
 import { useApiKey } from "@/hooks/use-nhid";
+import VideoTemplate from "@/components/video/VideoTemplate";
 
 const queryClient = new QueryClient();
 
@@ -104,16 +105,6 @@ function LoginScreen() {
       >
         Log in to continue
       </button>
-
-      <p
-        style={{
-          color: "#334155",
-          fontSize: "0.8rem",
-          marginTop: "2rem",
-        }}
-      >
-        Secure single sign-on
-      </p>
     </div>
   );
 }
@@ -164,6 +155,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 function Router() {
   return (
     <Switch>
+      {/* Video Route - Unprotected so it can be recorded easily */}
+      <Route path="/video" component={VideoTemplate} />
+
       {/* Admin portal — standalone, no shared layout, no auth gate */}
       <Route path="/admin" component={AdminPage} />
 
