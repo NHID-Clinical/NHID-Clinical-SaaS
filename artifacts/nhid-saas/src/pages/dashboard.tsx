@@ -1,8 +1,12 @@
 import { useState, useRef } from "react";
 import { useGetMe, useGetRecent, useVoicePolicy, useSaveVoicePolicy } from "@/hooks/use-nhid";
+import { VoicePolicyRule } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
-import { Activity, ShieldCheck, Zap, Server, Mic, Plus, X, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  Activity, ShieldCheck, Zap, Server, Mic,
+  Plus, X, ChevronDown, ChevronUp, Shield, ToggleLeft, ToggleRight,
+} from "lucide-react";
 
 function GlassCard({
   children,
@@ -53,16 +57,12 @@ function StatCard({
         >
           {label}
         </span>
-        <Icon
-          size={15}
-          style={{ color: accent ? "var(--nhid-teal)" : "var(--nhid-muted)", opacity: 0.8 }}
-        />
+        <Icon size={15} style={{ color: accent ? "var(--nhid-teal)" : "var(--nhid-muted)", opacity: 0.8 }} />
       </div>
       <div
         style={{
           fontSize: 30, fontWeight: 800, color: "var(--nhid-text)",
-          letterSpacing: "-0.02em", lineHeight: 1,
-          marginBottom: 8,
+          letterSpacing: "-0.02em", lineHeight: 1, marginBottom: 8,
         }}
       >
         {value}
@@ -173,71 +173,222 @@ function PhraseChip({
   );
 }
 
-function PolicyRulesCard() {
-  const { data: policy, isLoading } = useVoicePolicy();
-  const { mutate: savePolicy, isPending: saving, isError: saveError, isSuccess: saveSuccess } = useSaveVoicePolicy();
-
-  const [localPhrases, setLocalPhrases] = useState<string[] | null>(null);
+function RuleCard({
+  rule,
+  description,
+  isEditing,
+  onToggle,
+  onPhrasesChange,
+}: {
+  rule: VoicePolicyRule;
+  description: string;
+  isEditing: boolean;
+  onToggle: () => void;
+  onPhrasesChange?: (phrases: string[]) => void;
+}) {
   const [newPhrase, setNewPhrase] = useState("");
-  const [showHistory, setShowHistory] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  const activePhrases = localPhrases ?? policy?.phrases ?? [];
-  const isDirty = localPhrases !== null && JSON.stringify(localPhrases) !== JSON.stringify(policy?.phrases ?? []);
-
-  function startEditing(phrases: string[]) {
-    setLocalPhrases([...phrases]);
-  }
-
-  function removePhrase(i: number) {
-    const next = activePhrases.filter((_, idx) => idx !== i);
-    setLocalPhrases(next);
-  }
+  const phrases: string[] = (rule.params?.phrases as string[]) ?? [];
 
   function addPhrase() {
-    const trimmed = newPhrase.trim().toLowerCase();
-    if (!trimmed) return;
-    if (activePhrases.includes(trimmed)) {
-      setNewPhrase("");
-      return;
-    }
-    const next = [...activePhrases, trimmed];
-    setLocalPhrases(next);
+    const t = newPhrase.trim().toLowerCase();
+    if (!t || phrases.includes(t) || !onPhrasesChange) return;
+    onPhrasesChange([...phrases, t]);
     setNewPhrase("");
     inputRef.current?.focus();
   }
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") { e.preventDefault(); addPhrase(); }
-    if (e.key === "Escape") { setNewPhrase(""); }
+  function removePhrase(i: number) {
+    if (!onPhrasesChange) return;
+    onPhrasesChange(phrases.filter((_, idx) => idx !== i));
+  }
+
+  const isEnabled = rule.enabled;
+
+  return (
+    <div
+      style={{
+        borderRadius: 10,
+        border: `1px solid ${isEnabled ? "rgba(0,194,168,0.18)" : "rgba(255,255,255,0.07)"}`,
+        background: isEnabled ? "rgba(0,194,168,0.03)" : "rgba(255,255,255,0.01)",
+        padding: "16px 18px",
+        transition: "border-color 0.2s, background 0.2s",
+      }}
+    >
+      {/* Rule header */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: description || rule.rule_type === "phrase_match" ? 10 : 0 }}>
+        <Shield
+          size={14}
+          style={{ color: isEnabled ? "var(--nhid-teal)" : "var(--nhid-muted)", marginTop: 2, flexShrink: 0 }}
+        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: isEnabled ? "var(--nhid-text)" : "var(--nhid-muted)" }}>
+              {rule.label}
+            </span>
+            <span
+              style={{
+                fontSize: 9, fontWeight: 700, fontFamily: "monospace",
+                padding: "2px 6px", borderRadius: 4,
+                background: rule.rule_type === "builtin"
+                  ? "rgba(83,216,251,0.1)" : "rgba(0,194,168,0.1)",
+                border: rule.rule_type === "builtin"
+                  ? "1px solid rgba(83,216,251,0.2)" : "1px solid rgba(0,194,168,0.2)",
+                color: rule.rule_type === "builtin" ? "var(--nhid-cyan)" : "var(--nhid-teal)",
+                letterSpacing: "0.06em", textTransform: "uppercase",
+              }}
+            >
+              {rule.rule_type === "builtin" ? "built-in" : rule.rule_type.replace("_", "-")}
+            </span>
+          </div>
+          {description && (
+            <p style={{ fontSize: 11, color: "var(--nhid-muted)", marginTop: 3, lineHeight: 1.5 }}>
+              {description}
+            </p>
+          )}
+        </div>
+
+        {/* Toggle */}
+        <button
+          onClick={isEditing ? onToggle : undefined}
+          disabled={!isEditing}
+          title={isEditing ? (isEnabled ? "Disable rule" : "Enable rule") : "Click Edit to modify"}
+          style={{
+            background: "none", border: "none",
+            cursor: isEditing ? "pointer" : "default",
+            padding: 0, lineHeight: 1, flexShrink: 0,
+            opacity: isEditing ? 1 : 0.5,
+          }}
+        >
+          {isEnabled
+            ? <ToggleRight size={22} style={{ color: "var(--nhid-teal)" }} />
+            : <ToggleLeft size={22} style={{ color: "var(--nhid-muted)" }} />
+          }
+        </button>
+      </div>
+
+      {/* Phrase editor — only for phrase_match rules */}
+      {rule.rule_type === "phrase_match" && (
+        <div style={{ marginTop: 10 }}>
+          <div
+            style={{
+              display: "flex", flexWrap: "wrap", gap: 6,
+              padding: "10px 12px", borderRadius: 8,
+              background: "rgba(255,255,255,0.02)",
+              border: "1px solid rgba(255,255,255,0.05)",
+              minHeight: 42,
+            }}
+          >
+            {phrases.length === 0 ? (
+              <span style={{ fontSize: 11, color: "var(--nhid-muted)", alignSelf: "center" }}>
+                No trigger phrases — add at least one.
+              </span>
+            ) : (
+              phrases.map((phrase, i) => (
+                <PhraseChip
+                  key={phrase}
+                  phrase={phrase}
+                  removable={isEditing}
+                  onRemove={() => removePhrase(i)}
+                />
+              ))
+            )}
+          </div>
+
+          {isEditing && (
+            <div style={{ display: "flex", gap: 7, marginTop: 8 }}>
+              <input
+                ref={inputRef}
+                value={newPhrase}
+                onChange={(e) => setNewPhrase(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); addPhrase(); }
+                  if (e.key === "Escape") setNewPhrase("");
+                }}
+                placeholder="Type a phrase and press Enter…"
+                style={{
+                  flex: 1, padding: "7px 11px", borderRadius: 7, fontSize: 11,
+                  background: "rgba(255,255,255,0.04)", border: "1px solid rgba(0,194,168,0.22)",
+                  color: "var(--nhid-text)", outline: "none", fontFamily: "monospace",
+                }}
+              />
+              <button
+                onClick={addPhrase}
+                style={{
+                  padding: "7px 11px", borderRadius: 7, cursor: "pointer",
+                  background: "rgba(0,194,168,0.12)", border: "1px solid rgba(0,194,168,0.25)",
+                  color: "var(--nhid-teal)", display: "flex", alignItems: "center", gap: 4,
+                  fontSize: 11, fontWeight: 700,
+                }}
+              >
+                <Plus size={11} /> Add
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PolicyRulesCard() {
+  const { data: policy, isLoading } = useVoicePolicy();
+  const { mutate: savePolicy, isPending: saving, isError: saveError, isSuccess: saveSuccess } = useSaveVoicePolicy();
+
+  const [localRules, setLocalRules] = useState<VoicePolicyRule[] | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+
+  const activeRules: VoicePolicyRule[] = localRules ?? policy?.rules ?? [];
+  const isEditing = localRules !== null;
+  const isDirty = isEditing && JSON.stringify(localRules) !== JSON.stringify(policy?.rules ?? []);
+
+  function startEditing() {
+    setLocalRules(activeRules.map((r) => ({ ...r, params: { ...r.params } })));
+  }
+
+  function toggleRule(ruleKey: string) {
+    setLocalRules((prev) =>
+      (prev ?? []).map((r) =>
+        r.rule_key === ruleKey ? { ...r, enabled: !r.enabled } : r
+      )
+    );
+  }
+
+  function updatePhrases(ruleKey: string, phrases: string[]) {
+    setLocalRules((prev) =>
+      (prev ?? []).map((r) =>
+        r.rule_key === ruleKey ? { ...r, params: { ...r.params, phrases } } : r
+      )
+    );
   }
 
   function handleSave() {
     if (!isDirty || saving) return;
-    savePolicy(activePhrases, {
-      onSuccess: () => setLocalPhrases(null),
+    savePolicy(localRules!, {
+      onSuccess: () => setLocalRules(null),
     });
   }
 
   function handleDiscard() {
-    setLocalPhrases(null);
-    setNewPhrase("");
+    setLocalRules(null);
   }
 
   if (isLoading) {
     return (
       <GlassCard style={{ padding: "22px" }}>
-        <Skeleton className="h-4 w-32 mb-4" />
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-          {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-6 w-24" style={{ borderRadius: 20 }} />)}
+        <Skeleton className="h-4 w-40 mb-5" />
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {[...Array(2)].map((_, i) => (
+            <Skeleton key={i} className="h-24 w-full" style={{ borderRadius: 10 }} />
+          ))}
         </div>
-        <Skeleton className="h-8 w-full" style={{ borderRadius: 8 }} />
       </GlassCard>
     );
   }
 
-  const versionLabel = policy?.is_custom ? policy.version : "default";
+  const versionLabel = policy?.is_custom ? policy.version : "system default";
   const historyEntries = policy?.history ?? [];
+  const registry = policy?.registry ?? {};
 
   return (
     <GlassCard style={{ padding: "22px" }}>
@@ -247,10 +398,10 @@ function PolicyRulesCard() {
           <Mic size={15} style={{ color: "var(--nhid-teal)", opacity: 0.85 }} />
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: "var(--nhid-text)" }}>
-              Voice Policy Rules
+              Policy Rules
             </div>
             <div style={{ fontSize: 11, color: "var(--nhid-muted)", marginTop: 2 }}>
-              Phrases that trigger human escalation
+              Active enforcement rules applied to every voice transcript
             </div>
           </div>
         </div>
@@ -268,70 +419,32 @@ function PolicyRulesCard() {
         </span>
       </div>
 
-      {/* Phrase chips */}
-      <div
-        style={{
-          display: "flex", flexWrap: "wrap", gap: 7,
-          padding: "14px", borderRadius: 10,
-          background: "rgba(255,255,255,0.02)",
-          border: "1px solid rgba(255,255,255,0.05)",
-          minHeight: 52,
-          marginBottom: 14,
-        }}
-        onClick={() => { if (localPhrases === null) startEditing(activePhrases); }}
-      >
-        {activePhrases.length === 0 ? (
-          <span style={{ fontSize: 11, color: "var(--nhid-muted)", alignSelf: "center" }}>
-            No phrases configured — all transcripts will pass unchecked.
-          </span>
-        ) : (
-          activePhrases.map((phrase, i) => (
-            <PhraseChip
-              key={phrase}
-              phrase={phrase}
-              removable={localPhrases !== null}
-              onRemove={() => removePhrase(i)}
+      {/* Rule cards */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+        {activeRules.map((rule) => {
+          const meta = registry[rule.rule_key];
+          return (
+            <RuleCard
+              key={rule.rule_key}
+              rule={rule}
+              description={meta?.description ?? ""}
+              isEditing={isEditing}
+              onToggle={() => toggleRule(rule.rule_key)}
+              onPhrasesChange={
+                rule.rule_type === "phrase_match"
+                  ? (phrases) => updatePhrases(rule.rule_key, phrases)
+                  : undefined
+              }
             />
-          ))
-        )}
+          );
+        })}
       </div>
-
-      {/* Add phrase input — only visible when editing */}
-      {localPhrases !== null && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          <input
-            ref={inputRef}
-            value={newPhrase}
-            onChange={(e) => setNewPhrase(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a phrase and press Enter…"
-            autoFocus
-            style={{
-              flex: 1, padding: "8px 12px", borderRadius: 8, fontSize: 12,
-              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(0,194,168,0.25)",
-              color: "var(--nhid-text)", outline: "none",
-              fontFamily: "monospace",
-            }}
-          />
-          <button
-            onClick={addPhrase}
-            style={{
-              padding: "8px 12px", borderRadius: 8, cursor: "pointer",
-              background: "rgba(0,194,168,0.12)", border: "1px solid rgba(0,194,168,0.25)",
-              color: "var(--nhid-teal)", display: "flex", alignItems: "center", gap: 4,
-              fontSize: 11, fontWeight: 700,
-            }}
-          >
-            <Plus size={12} /> Add
-          </button>
-        </div>
-      )}
 
       {/* Action row */}
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {localPhrases === null ? (
+        {!isEditing ? (
           <button
-            onClick={() => startEditing(activePhrases)}
+            onClick={startEditing}
             style={{
               padding: "7px 16px", borderRadius: 8, cursor: "pointer",
               background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
@@ -339,7 +452,7 @@ function PolicyRulesCard() {
               fontFamily: "'Raleway', sans-serif",
             }}
           >
-            Edit Phrases
+            Edit Rules
           </button>
         ) : (
           <>
@@ -347,7 +460,8 @@ function PolicyRulesCard() {
               onClick={handleSave}
               disabled={!isDirty || saving}
               style={{
-                padding: "7px 16px", borderRadius: 8, cursor: isDirty && !saving ? "pointer" : "default",
+                padding: "7px 16px", borderRadius: 8,
+                cursor: isDirty && !saving ? "pointer" : "default",
                 background: isDirty && !saving ? "rgba(0,194,168,0.15)" : "rgba(255,255,255,0.03)",
                 border: `1px solid ${isDirty && !saving ? "rgba(0,194,168,0.35)" : "rgba(255,255,255,0.08)"}`,
                 color: isDirty && !saving ? "var(--nhid-teal)" : "var(--nhid-muted)",
@@ -371,7 +485,7 @@ function PolicyRulesCard() {
           </>
         )}
 
-        {saveSuccess && localPhrases === null && (
+        {saveSuccess && !isEditing && (
           <span style={{ fontSize: 11, color: "var(--nhid-teal)", fontWeight: 600 }}>
             ✓ Saved
           </span>
@@ -384,7 +498,7 @@ function PolicyRulesCard() {
 
         {historyEntries.length > 0 && (
           <button
-            onClick={() => setShowHistory(v => !v)}
+            onClick={() => setShowHistory((v) => !v)}
             style={{
               marginLeft: "auto", padding: "6px 12px", borderRadius: 8, cursor: "pointer",
               background: "none", border: "1px solid rgba(255,255,255,0.06)",
@@ -394,7 +508,7 @@ function PolicyRulesCard() {
             }}
           >
             {showHistory ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-            {showHistory ? "Hide" : "History"} ({historyEntries.length})
+            {showHistory ? "Hide" : "Version History"} ({historyEntries.length})
           </button>
         )}
       </div>
@@ -411,32 +525,39 @@ function PolicyRulesCard() {
             Version History
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {historyEntries.map((entry, i) => (
-              <div
-                key={entry.id}
-                style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  padding: "9px 12px", borderRadius: 8,
-                  background: i === 0 ? "rgba(0,194,168,0.04)" : "rgba(255,255,255,0.01)",
-                  border: `1px solid ${i === 0 ? "rgba(0,194,168,0.12)" : "rgba(255,255,255,0.04)"}`,
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 10, fontFamily: "monospace", color: i === 0 ? "var(--nhid-teal)" : "var(--nhid-muted)", fontWeight: 600 }}>
-                    {entry.version}
-                    {i === 0 && (
-                      <span style={{ marginLeft: 6, fontSize: 9, opacity: 0.7 }}>current</span>
-                    )}
+            {historyEntries.map((entry, i) => {
+              const enabledCount = entry.rules.filter((r) => r.enabled).length;
+              return (
+                <div
+                  key={entry.id}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "9px 12px", borderRadius: 8,
+                    background: i === 0 ? "rgba(0,194,168,0.04)" : "rgba(255,255,255,0.01)",
+                    border: `1px solid ${i === 0 ? "rgba(0,194,168,0.12)" : "rgba(255,255,255,0.04)"}`,
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 10, fontFamily: "monospace",
+                        color: i === 0 ? "var(--nhid-teal)" : "var(--nhid-muted)",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {entry.version}
+                      {i === 0 && <span style={{ marginLeft: 6, fontSize: 9, opacity: 0.7 }}>current</span>}
+                    </div>
+                    <div style={{ fontSize: 10, color: "var(--nhid-muted)", marginTop: 2 }}>
+                      {enabledCount} of {entry.rules.length} rule{entry.rules.length !== 1 ? "s" : ""} enabled
+                    </div>
                   </div>
-                  <div style={{ fontSize: 10, color: "var(--nhid-muted)", marginTop: 2 }}>
-                    {entry.phrases.length} phrase{entry.phrases.length !== 1 ? "s" : ""}
+                  <div style={{ fontSize: 10, color: "var(--nhid-muted)", fontFamily: "monospace", flexShrink: 0 }}>
+                    {format(new Date(entry.created_at), "MMM d, HH:mm")}
                   </div>
                 </div>
-                <div style={{ fontSize: 10, color: "var(--nhid-muted)", fontFamily: "monospace", flexShrink: 0 }}>
-                  {format(new Date(entry.created_at), "MMM d, HH:mm")}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

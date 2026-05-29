@@ -729,7 +729,7 @@ async def voice_transcript(body: VoiceTranscriptRequest, org: Dict = Depends(get
     decision = run_voice_policy(
         body.transcript_text,
         state_snapshot,
-        phrases=org_policy["phrases"],
+        ruleset=org_policy["rules"],
         policy_version=org_policy["version"],
     )
     action = decision["action"]
@@ -790,24 +790,35 @@ async def voice_transcript(body: VoiceTranscriptRequest, org: Dict = Depends(get
 @app.get("/saas/voice/policy", tags=["Voice"])
 async def get_voice_policy(org: Dict = Depends(get_current_org)):
     """
-    Return the org's current voice policy configuration.
+    Return the org's current voice policy configuration (full rule list).
     If no custom config has been saved, returns the system defaults.
-    Also includes the last 10 saved versions for display in the dashboard.
+    Also includes the last 10 saved ruleset versions for the history view.
+    Also exposes the built-in rule registry so the UI can describe each rule type.
     """
     effective = voice_policy_store.get_effective_policy(org["org_id"])
     history = voice_policy_store.get_policy_history(org["org_id"], limit=10)
     return {
         "org_id": org["org_id"],
-        "phrases": effective["phrases"],
+        "rules": effective["rules"],
         "version": effective["version"],
         "is_custom": effective["is_custom"],
         "created_at": effective.get("created_at"),
         "history": history,
+        "registry": voice_policy_store.BUILTIN_RULE_REGISTRY,
     }
 
 
+class VoicePolicyRuleBody(BaseModel):
+    rule_key: str
+    rule_type: str
+    label: str
+    enabled: bool = True
+    priority: int = 0
+    params: dict = {}
+
+
 class VoicePolicyUpdateBody(BaseModel):
-    phrases: List[str]
+    rules: List[VoicePolicyRuleBody]
 
 
 @app.put("/saas/voice/policy", tags=["Voice"])
@@ -816,17 +827,33 @@ async def update_voice_policy(
     org: Dict = Depends(get_current_org),
 ):
     """
-    Save a new set of escalation trigger phrases for the org.
+    Save a new ruleset for the org.
     Each save creates an append-only version row for audit purposes.
     Returns the newly active policy.
     """
-    phrases = [p.strip().lower() for p in body.phrases if p.strip()]
-    if not phrases:
-        raise HTTPException(status_code=422, detail="phrases must be a non-empty list of strings.")
-    if len(phrases) > 100:
-        raise HTTPException(status_code=422, detail="Maximum 100 trigger phrases allowed.")
+    if not body.rules:
+        raise HTTPException(status_code=422, detail="rules must be a non-empty list.")
+    if len(body.rules) > 20:
+        raise HTTPException(status_code=422, detail="Maximum 20 rules allowed.")
 
-    saved = voice_policy_store.save_policy(org["org_id"], phrases)
+    ruleset = []
+    for r in body.rules:
+        rule = {
+            "rule_key": r.rule_key,
+            "rule_type": r.rule_type,
+            "label": r.label,
+            "enabled": r.enabled,
+            "priority": r.priority,
+            "params": r.params,
+        }
+        # Normalise phrase_match phrases
+        if r.rule_type == "phrase_match" and "phrases" in r.params:
+            rule["params"]["phrases"] = [
+                p.strip().lower() for p in r.params["phrases"] if p.strip()
+            ]
+        ruleset.append(rule)
+
+    saved = voice_policy_store.save_ruleset(org["org_id"], ruleset)
     log_request(org["org_id"], "/saas/voice/policy", "PUT", 200, None)
     return saved
 

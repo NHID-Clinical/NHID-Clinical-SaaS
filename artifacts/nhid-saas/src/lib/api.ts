@@ -192,24 +192,42 @@ export interface VoiceTranscriptResult {
   event_hash: string;
 }
 
+export interface VoicePolicyRule {
+  rule_key: string;
+  rule_type: string;
+  label: string;
+  enabled: boolean;
+  priority: number;
+  params: Record<string, unknown>;
+}
+
 export interface VoicePolicyHistoryEntry {
   id: number;
-  phrases: string[];
+  rules: VoicePolicyRule[];
   version: string;
   created_at: string;
 }
 
+export interface VoicePolicyRegistryEntry {
+  rule_key: string;
+  rule_type: string;
+  label: string;
+  description: string;
+  params_schema: Record<string, string>;
+}
+
 export interface VoicePolicyConfig {
   org_id: string;
-  phrases: string[];
+  rules: VoicePolicyRule[];
   version: string;
   is_custom: boolean;
   created_at: string | null;
   history: VoicePolicyHistoryEntry[];
+  registry: Record<string, VoicePolicyRegistryEntry>;
 }
 
 export interface VoicePolicySaveResult {
-  phrases: string[];
+  rules: VoicePolicyRule[];
   version: string;
   created_at: string;
   is_custom: boolean;
@@ -327,11 +345,11 @@ export const api = {
   getVoicePolicy: (apiKey: string): Promise<VoicePolicyConfig> =>
     req<VoicePolicyConfig>("/saas/voice/policy", {}, apiKey),
 
-  /** Save a new voice policy config for the org. */
-  saveVoicePolicy: (apiKey: string, phrases: string[]): Promise<VoicePolicySaveResult> =>
+  /** Save a new voice policy ruleset for the org. */
+  saveVoicePolicy: (apiKey: string, rules: VoicePolicyRule[]): Promise<VoicePolicySaveResult> =>
     req<VoicePolicySaveResult>(
       "/saas/voice/policy",
-      { method: "PUT", body: JSON.stringify({ phrases }) },
+      { method: "PUT", body: JSON.stringify({ rules }) },
       apiKey,
     ),
 };

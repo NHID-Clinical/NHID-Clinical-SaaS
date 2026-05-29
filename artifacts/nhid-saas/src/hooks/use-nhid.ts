@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, TraceRequest, Plan } from "@/lib/api";
+import { api, TraceRequest, Plan, VoicePolicyRule } from "@/lib/api";
 
 export function useGetPlans() {
   return useQuery({
@@ -116,7 +116,7 @@ export function useSaveVoicePolicy() {
   const apiKey = useApiKey();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (phrases: string[]) => api.saveVoicePolicy(apiKey!, phrases),
+    mutationFn: (rules: VoicePolicyRule[]) => api.saveVoicePolicy(apiKey!, rules),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["voicePolicy"] });
     },
