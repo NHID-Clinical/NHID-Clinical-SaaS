@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Shield, Search, BarChart2,
-  X, Menu, LogIn, ChevronRight, LogOut, Activity,
+  X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard,
 } from "lucide-react";
 import { useApiKey } from "@/hooks/use-nhid";
 import { useAuth } from "@workspace/replit-auth-web";
@@ -32,6 +32,7 @@ const NAV_ITEMS = [
   { name: "Audit Trail", href: "/trace", icon: Shield, desc: "Log an event" },
   { name: "Verification", href: "/proof", icon: Search, desc: "Verify a session" },
   { name: "Usage", href: "/usage", icon: BarChart2, desc: "API usage stats" },
+  { name: "Billing", href: "/billing", icon: CreditCard, desc: "Plans & upgrade" },
 ];
 
 function StatusDot({ status }: { status: "up" | "down" | "unknown" }) {

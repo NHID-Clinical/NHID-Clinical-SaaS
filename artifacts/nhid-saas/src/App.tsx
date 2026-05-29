@@ -12,6 +12,7 @@ import Dashboard from "@/pages/dashboard";
 import Usage from "@/pages/usage";
 import Trace from "@/pages/trace";
 import Proof from "@/pages/proof";
+import Billing from "@/pages/billing";
 import AdminPage from "@/pages/admin";
 import { useApiKey } from "@/hooks/use-nhid";
 
@@ -177,6 +178,7 @@ function Router() {
               <Route path="/usage"><ProtectedRoute component={Usage} /></Route>
               <Route path="/trace"><ProtectedRoute component={Trace} /></Route>
               <Route path="/proof"><ProtectedRoute component={Proof} /></Route>
+              <Route path="/billing"><ProtectedRoute component={Billing} /></Route>
               <Route component={NotFound} />
             </Switch>
           </Layout>

@@ -59,6 +59,8 @@ def migrate_billing_columns() -> None:
             conn.execute(
                 "ALTER TABLE orgs ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
             )
+        if "replit_user_id" not in existing:
+            conn.execute("ALTER TABLE orgs ADD COLUMN replit_user_id TEXT")
         # Idempotency table for webhook replay safety
         conn.execute("""
             CREATE TABLE IF NOT EXISTS processed_events (

@@ -165,3 +165,28 @@ def purge_expired_admin_sessions() -> None:
             "DELETE FROM admin_sessions WHERE expires_at < ?", (_time.time(),)
         )
     conn.close()
+
+
+# ── User ↔ Org linkage (Replit user ID) ──────────────────────────────────────
+
+def link_org_to_user(org_id: str, replit_user_id: str) -> bool:
+    """Associate a Replit user ID with an org. Returns True if the org was found."""
+    conn = _get_conn()
+    with conn:
+        cur = conn.execute(
+            "UPDATE orgs SET replit_user_id = ? WHERE org_id = ?",
+            (replit_user_id, org_id),
+        )
+    conn.close()
+    return cur.rowcount > 0
+
+
+def get_org_by_user(replit_user_id: str) -> Optional[Dict[str, Any]]:
+    """Return the org row for a given Replit user ID, or None if not found."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM orgs WHERE replit_user_id = ? AND active = 1",
+        (replit_user_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None

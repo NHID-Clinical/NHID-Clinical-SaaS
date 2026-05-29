@@ -42,6 +42,7 @@ from saas_layer.auth import (
     list_orgs, increment_usage,
     create_admin_session, validate_admin_session,
     delete_admin_session, purge_expired_admin_sessions,
+    link_org_to_user, get_org_by_user,
 )
 from saas_layer.usage import log_request, get_usage_summary, get_recent_activity, get_global_stats
 from saas_layer.billing import get_plan, check_rate_limit, get_upgrade_path
@@ -285,6 +286,53 @@ async def register_org(body: RegisterOrgRequest):
         "org_name": org["org_name"],
         "api_key": org["api_key"],
         "plan": org["plan"],
+    }
+
+
+# ── Org: user ↔ org linkage ───────────────────────────────────────────────────
+
+class LinkOrgRequest(BaseModel):
+    replit_user_id: str
+
+
+@app.post("/saas/org/link", tags=["Org"])
+async def link_org(body: LinkOrgRequest, org: Dict = Depends(get_current_org)):
+    """
+    Associate a Replit user ID with the caller's org (identified by API key).
+    Idempotent — safe to call on every login. Returns the updated org summary.
+    """
+    uid = (body.replit_user_id or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="replit_user_id is required.")
+    ok = link_org_to_user(org["org_id"], uid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Org not found.")
+    return {
+        "org_id": org["org_id"],
+        "org_name": org["org_name"],
+        "replit_user_id": uid,
+        "linked": True,
+    }
+
+
+@app.get("/saas/org/by-user/{replit_user_id}", tags=["Org"])
+async def get_org_for_user(replit_user_id: str):
+    """
+    Look up an org by Replit user ID. Returns org summary or 404.
+    Used by the frontend after login to auto-restore the session.
+    """
+    uid = (replit_user_id or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="replit_user_id is required.")
+    org = get_org_by_user(uid)
+    if not org:
+        raise HTTPException(status_code=404, detail="No org found for this user.")
+    return {
+        "org_id": org["org_id"],
+        "org_name": org["org_name"],
+        "api_key": org["api_key"],
+        "plan": org["plan"],
+        "status": org.get("status", "active"),
     }
 
 

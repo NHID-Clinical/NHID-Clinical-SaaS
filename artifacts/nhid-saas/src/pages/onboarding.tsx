@@ -8,6 +8,7 @@ import { Copy, Check, Eye, EyeOff } from "lucide-react";
 import { useCreateOrg, useApiKey } from "@/hooks/use-nhid";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@workspace/replit-auth-web";
 
 const schema = z.object({
   orgName: z.string().min(2, "Organization name must be at least 2 characters.").max(120),
@@ -251,18 +252,52 @@ function SignInPanel({ onSuccess }: { onSuccess: () => void }) {
   );
 }
 
+async function linkOrgToUser(apiKey: string, replitUserId: string) {
+  try {
+    await fetch("/saas-api/saas/org/link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+      body: JSON.stringify({ replit_user_id: replitUserId }),
+    });
+  } catch { /* non-fatal — user can still use the app */ }
+}
+
 export default function Onboarding() {
   const [, setLocation] = useLocation();
   const apiKey = useApiKey();
   const createOrg = useCreateOrg();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [createdOrg, setCreatedOrg] = useState<string>("");
   const [showSignIn, setShowSignIn] = useState(false);
+  const [autoLoading, setAutoLoading] = useState(false);
 
+  // Redirect if already signed in
   useEffect(() => {
     if (apiKey && !createdKey) setLocation("/dashboard");
   }, [apiKey, createdKey, setLocation]);
+
+  // Auto-load org from Replit user ID on login
+  useEffect(() => {
+    if (apiKey || createdKey || !user?.id) return;
+    setAutoLoading(true);
+    fetch(`/saas-api/saas/org/by-user/${encodeURIComponent(user.id)}`)
+      .then(async (res) => {
+        if (!res.ok) return; // 404 → show registration form
+        const data = await res.json();
+        localStorage.setItem("nhid_api_key", data.api_key);
+        localStorage.setItem("nhid_org", JSON.stringify({
+          org_id: data.org_id,
+          org_name: data.org_name,
+          plan: data.plan,
+        }));
+        window.dispatchEvent(new Event("storage"));
+        setLocation("/dashboard");
+      })
+      .catch(() => { /* ignore — show registration form */ })
+      .finally(() => setAutoLoading(false));
+  }, [user?.id, apiKey, createdKey]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -275,6 +310,8 @@ export default function Onboarding() {
         setCreatedOrg(data.orgName);
         setCreatedKey(res.api_key);
         toast({ title: "Workspace created", description: "Your API key is ready." });
+        // Link the new org to this Replit user for future auto-login
+        if (user?.id) linkOrgToUser(res.api_key, user.id);
       },
       onError: () => {
         toast({
@@ -336,7 +373,22 @@ export default function Onboarding() {
             boxShadow: "0 24px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,194,168,0.04) inset",
           }}
         >
-          {createdKey ? (
+          {autoLoading ? (
+            <div style={{ textAlign: "center", padding: "32px 0" }}>
+              <div
+                style={{
+                  width: 40, height: 40, borderRadius: 12, margin: "0 auto 14px",
+                  background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  boxShadow: "0 0 16px rgba(0,194,168,0.4)",
+                  fontFamily: "'Raleway', sans-serif", fontWeight: 900, fontSize: 19, color: "#070c17",
+                  animation: "pulse 1.5s ease-in-out infinite",
+                }}
+              >N</div>
+              <div style={{ fontSize: 13, color: "var(--nhid-muted)" }}>Restoring your workspace…</div>
+              <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }`}</style>
+            </div>
+          ) : createdKey ? (
             <ApiKeyReveal
               apiKey={createdKey}
               orgName={createdOrg}
