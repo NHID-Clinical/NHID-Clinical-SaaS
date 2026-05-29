@@ -1,0 +1,56 @@
+PS C:\Users\bnbay\NHID-Clinical-test> python -m pytest tests/ -v
+================================================= test session starts =================================================
+platform win32 -- Python 3.14.5, pytest-9.0.3, pluggy-1.6.0 -- C:\Users\bnbay\AppData\Local\Python\pythoncore-3.14-64\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\bnbay\NHID-Clinical-test
+configfile: pytest.ini
+plugins: anyio-4.13.0, asyncio-1.4.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 43 items
+
+tests/failure_injection_harness.py::TestInputValidation::test_empty_speech_result SKIPPED (NHID FastAPI serv...) [  2%]
+tests/failure_injection_harness.py::TestInputValidation::test_whitespace_only_speech SKIPPED (NHID FastAPI s...) [  4%]
+tests/failure_injection_harness.py::TestInputValidation::test_null_bytes_injection SKIPPED (NHID FastAPI ser...) [  6%]
+tests/failure_injection_harness.py::TestInputValidation::test_null_bytes_only SKIPPED (NHID FastAPI server n...) [  9%]
+tests/failure_injection_harness.py::TestInputValidation::test_missing_callsid SKIPPED (NHID FastAPI server n...) [ 11%]
+tests/failure_injection_harness.py::TestInputValidation::test_missing_all_fields SKIPPED (NHID FastAPI serve...) [ 13%]
+tests/failure_injection_harness.py::TestInputValidation::test_empty_callsid SKIPPED (NHID FastAPI server not...) [ 16%]
+tests/failure_injection_harness.py::TestInputValidation::test_very_long_speech SKIPPED (NHID FastAPI server ...) [ 18%]
+tests/failure_injection_harness.py::TestChaosMode::test_chaos_null_bytes_empty_callsid SKIPPED (NHID FastAPI...) [ 20%]
+tests/failure_injection_harness.py::TestChaosMode::test_chaos_correlation_id_header SKIPPED (NHID FastAPI se...) [ 23%]
+tests/failure_injection_harness.py::TestChaosMode::test_chaos_failure_injection_header SKIPPED (NHID FastAPI...) [ 25%]
+tests/failure_injection_harness.py::TestChaosMode::test_chaos_full_adversarial SKIPPED (NHID FastAPI server ...) [ 27%]
+tests/failure_injection_harness.py::TestPolicyEnforcement::test_idg01_violation_triggers_disclosure SKIPPED      [ 30%]
+tests/failure_injection_harness.py::TestPolicyEnforcement::test_escalation_trigger_in_speech SKIPPED (NHID F...) [ 32%]
+tests/failure_injection_harness.py::TestPolicyEnforcement::test_audit_trail_completeness SKIPPED (NHID FastA...) [ 34%]
+tests/failure_injection_harness.py::TestReplayDeterminism::test_replay_identity_normal_request SKIPPED (NHID...) [ 37%]
+tests/failure_injection_harness.py::TestReplayDeterminism::test_replay_idempotency_same_request_id SKIPPED (...) [ 39%]
+tests/failure_injection_harness.py::TestReplayDeterminism::test_replay_empty_speech_determinism SKIPPED (NHI...) [ 41%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_idg01_pass_disclosure_present PASSED              [ 44%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_idg01_fail_no_disclosure PASSED                   [ 46%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_idg01_fail_empty_assertion_text PASSED            [ 48%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_pdx01_blocks_phi_without_disclosure PASSED        [ 51%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_pdx01_allows_phi_after_disclosure PASSED          [ 53%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_pdx01_no_phi_no_violation PASSED                  [ 55%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_dbc01_pass_no_artifacts PASSED                    [ 58%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_dbc01_fail_fake_breathing PASSED                  [ 60%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_dbc01_fail_license_claim PASSED                   [ 62%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_eit01_no_escalation_trigger PASSED                [ 65%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_eit01_escalation_available PASSED                 [ 67%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_eit01_escalation_unavailable PASSED               [ 69%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_atr01_pass_all_fields_present PASSED              [ 72%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_atr01_fail_missing_session_id PASSED              [ 74%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_atr01_fail_missing_pipeline_version PASSED        [ 76%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_bot_to_bot_not_applicable_human PASSED            [ 79%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_bot_to_bot_undisclosed_agent PASSED               [ 81%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_bot_to_bot_disclosed_agent PASSED                 [ 83%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_evaluate_all_clean PASSED                         [ 86%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_evaluate_all_deny_dominates PASSED                [ 88%]
+tests/failure_injection_harness.py::TestPolicyEngineUnit::test_policy_engine_never_raises PASSED                 [ 90%]
+tests/test_identity.py::test_key_generation PASSED                                                               [ 93%]
+tests/test_identity.py::test_delegation_creation PASSED                                                          [ 95%]
+tests/test_identity.py::test_expired PASSED                                                                      [ 97%]
+tests/test_identity.py::test_revoked PASSED                                                                      [100%]
+
+=========================================== 25 passed, 18 skipped in 3.27s ============================================
+PS C:\Users\bnbay\NHID-Clinical-test>

@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "XVNWat-b_y7eRDJ_ea5hA"
+uri = "file://.local/dist/nhid-clinical-voice-policy-bundle.zip"
+type = "unspecified"
+title = "NHID-Clinical Voice Policy Bundle (engine + 47 conformance tests)"
