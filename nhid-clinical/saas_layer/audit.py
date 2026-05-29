@@ -137,11 +137,17 @@ def _get_chain_tail(cur, org_id: str) -> Tuple[str, int]:
     """
     Return (prev_hash, next_seq_num) for the given org's chain.
     Must be called inside an open transaction with the same cursor.
-    Uses FOR UPDATE to serialize concurrent writes per org.
+
+    Uses a transaction-level Postgres advisory lock keyed on org_id to
+    serialize concurrent writes.  FOR UPDATE cannot lock non-existent rows,
+    so it fails to protect the very first insert into an empty chain.
+    pg_advisory_xact_lock(bigint) blocks any other transaction that tries to
+    acquire the same lock key until this transaction commits or rolls back.
     """
+    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (org_id,))
     cur.execute(
         "SELECT event_hash, seq_num FROM audit_traces "
-        "WHERE org_id = %s ORDER BY seq_num DESC LIMIT 1 FOR UPDATE",
+        "WHERE org_id = %s ORDER BY seq_num DESC LIMIT 1",
         (org_id,),
     )
     row = cur.fetchone()

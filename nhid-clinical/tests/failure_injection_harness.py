@@ -26,10 +26,16 @@ Not an accredited standard. Not a regulatory requirement.
 
 from __future__ import annotations
 
+import concurrent.futures
+import datetime
+import hashlib
+import hmac as _hmac_mod
+import json
 import os
 import re
 import sqlite3
 import time
+import uuid
 from typing import Any
 
 import httpx
@@ -658,3 +664,221 @@ class TestPolicyEngineUnit:
         decision = self.engine.evaluate_all({}, {})
         assert isinstance(decision, self.engine.PolicyDecision)
         assert decision.action in list(self.engine.PolicyAction)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# HMAC + PostgreSQL audit layer tests (no HTTP server required)
+# ──────────────────────────────────────────────────────────────────────────
+
+class TestSaaSAuditHMAC:
+    """
+    Unit + integration tests for the HMAC signing and PostgreSQL audit chain
+    introduced during the SQLite → Postgres migration.
+
+    No HTTP server required. Tests saas_layer.audit directly.
+    Auto-skipped when HMAC_SECRET or DATABASE_URL are absent.
+    """
+
+    @pytest.fixture(autouse=True)
+    def import_audit(self) -> None:
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        try:
+            import saas_layer.audit as _audit
+            import saas_layer.db as _db
+            self.audit = _audit
+            self.db = _db
+        except ImportError as e:
+            pytest.skip(f"Could not import saas_layer: {e}")
+
+        if not os.environ.get("HMAC_SECRET"):
+            pytest.skip("HMAC_SECRET not set — skipping HMAC tests.")
+        if not os.environ.get("DATABASE_URL"):
+            pytest.skip("DATABASE_URL not set — skipping Postgres tests.")
+
+    def _test_org(self) -> str:
+        return f"test-harness-{uuid.uuid4().hex[:8]}"
+
+    def _test_session(self) -> str:
+        return f"test-session-{uuid.uuid4().hex[:8]}"
+
+    def _sample_event(self, suffix: str = "") -> dict:
+        return {
+            "event_type": "POLICY",
+            "state_before": "AWAITING_DISCLOSURE",
+            "state_after": "DISCLOSED",
+            "input_text": f"check eligibility {suffix}",
+            "policy_action": "CONTINUE_AI",
+            "reason_code": "IDG-01-PASS",
+            "response_text": "Disclosure confirmed.",
+            "policy_version": "1.0.0",
+        }
+
+    def test_hmac_deterministic_and_unique(self) -> None:
+        """
+        compute_event_hash and sign_event must be deterministic for identical
+        inputs and produce different output when org_id or prev_hash differ.
+        Pure cryptographic unit test — no database access.
+        """
+        event = self._sample_event()
+        genesis = self.audit.GENESIS_HASH
+
+        # Deterministic: same inputs → same hash
+        h1 = self.audit.compute_event_hash(event, genesis)
+        h2 = self.audit.compute_event_hash(event, genesis)
+        assert h1 == h2, "compute_event_hash is not deterministic"
+        assert len(h1) == 64, f"Expected 64-char hex SHA256, got {len(h1)}"
+
+        # Input-sensitive: different prev_hash → different event_hash
+        h_alt = self.audit.compute_event_hash(event, "a" * 64)
+        assert h1 != h_alt, "Different prev_hash must produce a different event_hash"
+
+        # HMAC: same inputs → same signature
+        ts = "2026-05-29T12:00:00+00:00"
+        sig1 = self.audit.sign_event(h1, "org-test", ts, "1.0.0", 0)
+        sig2 = self.audit.sign_event(h1, "org-test", ts, "1.0.0", 0)
+        assert sig1 == sig2, "sign_event is not deterministic"
+        assert len(sig1) == 64, f"Expected 64-char HMAC-SHA256 hex, got {len(sig1)}"
+
+        # HMAC: different org_id → different signature (org isolation)
+        sig_other = self.audit.sign_event(h1, "org-other", ts, "1.0.0", 0)
+        assert sig1 != sig_other, "Different org_id must produce a different HMAC signature"
+
+    def test_append_and_verify_three_event_chain(self) -> None:
+        """
+        Write 3 consecutive events via append_trace(). verify_chain() must
+        return chain_valid=True, hmac_valid=True, breaks=[], and all per-event
+        hash_ok/hmac_ok flags True. Confirms the full Postgres write+verify path.
+        """
+        org_id = self._test_org()
+        session_id = self._test_session()
+
+        for i in range(3):
+            r = self.audit.append_trace(org_id, session_id, self._sample_event(str(i)))
+            assert r["event_id"], f"append_trace[{i}] returned no event_id"
+            assert r["seq_num"] == i, f"Expected seq_num={i}, got {r['seq_num']}"
+            assert len(r["event_hash"]) == 64, "event_hash must be 64-char hex"
+            assert len(r["hmac_signature"]) == 64, "hmac_signature must be 64-char hex"
+
+        proof = self.audit.verify_chain(org_id, session_id)
+        assert proof["chain_valid"] is True, f"chain_valid=False: {proof['breaks']}"
+        assert proof["hmac_valid"] is True, f"hmac_valid=False: {proof['breaks']}"
+        assert proof["event_count"] == 3, f"Expected 3 events, got {proof['event_count']}"
+        assert proof["breaks"] == [], f"Unexpected chain breaks: {proof['breaks']}"
+        for ev in proof["events"]:
+            assert ev["hash_ok"] is True, f"hash_ok=False at seq_num={ev['seq_num']}"
+            assert ev["hmac_ok"] is True, f"hmac_ok=False at seq_num={ev['seq_num']}"
+
+    def test_tamper_detection_wrong_prev_hash(self) -> None:
+        """
+        A row force-inserted with a forged prev_hash must be detected as a
+        chain break. Simulates an attacker inserting a fabricated audit event
+        that doesn't link correctly to the preceding record.
+        """
+        org_id = self._test_org()
+        session_id = self._test_session()
+
+        # Two legitimate events
+        self.audit.append_trace(org_id, session_id, self._sample_event("t0"))
+        r1 = self.audit.append_trace(org_id, session_id, self._sample_event("t1"))
+
+        # Force-insert a 3rd row with a wrong prev_hash (bypasses append_trace locking)
+        bad_prev = "b" * 64  # must be r1["event_hash"] to be valid — deliberately wrong
+        event = self._sample_event("t2-tampered")
+        payload_keys = (
+            "event_type", "state_before", "state_after", "input_text",
+            "policy_action", "reason_code", "response_text", "policy_version",
+            "model_version",
+        )
+        canonical = json.dumps(
+            {k: event.get(k) for k in payload_keys},
+            sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8") + bad_prev.encode("utf-8")
+        bad_hash = hashlib.sha256(canonical).hexdigest()
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        secret = os.environ["HMAC_SECRET"].encode("utf-8")
+        bad_sig = _hmac_mod.new(
+            secret,
+            (bad_hash + org_id + ts + "1.0.0" + "2").encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+        conn = self.db.get_conn()
+        try:
+            with conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO audit_traces (
+                        event_id, session_id, org_id, seq_num,
+                        event_type, state_before, state_after,
+                        input_text, policy_action, reason_code, response_text,
+                        policy_version, model_version,
+                        timestamp, prev_hash, event_hash, hmac_signature
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        str(uuid.uuid4()), session_id, org_id, 2,
+                        event.get("event_type"), event.get("state_before"),
+                        event.get("state_after"), event.get("input_text"),
+                        event.get("policy_action"), event.get("reason_code"),
+                        event.get("response_text"), "1.0.0", None,
+                        ts, bad_prev, bad_hash, bad_sig,
+                    ),
+                )
+        finally:
+            conn.close()
+
+        proof = self.audit.verify_chain(org_id, session_id)
+        assert proof["chain_valid"] is False, (
+            "chain_valid must be False after inserting a row with a forged prev_hash"
+        )
+        assert len(proof["breaks"]) >= 1, "Expected at least one chain break entry"
+        break_seqs = [b["seq_num"] for b in proof["breaks"]]
+        assert 2 in break_seqs, (
+            f"Break must be reported at seq_num=2 (the tampered row). Got: {break_seqs}"
+        )
+
+    def test_concurrent_writes_same_org_no_collision(self) -> None:
+        """
+        5 threads simultaneously calling append_trace() for the same org must
+        all succeed. The resulting chain must be valid with seq_nums 0–4, no
+        gaps, no duplicates. Confirms FOR UPDATE serialization in _get_chain_tail.
+        """
+        org_id = self._test_org()
+        session_id = self._test_session()
+        errors: list = []
+
+        def write(i: int):
+            try:
+                return self.audit.append_trace(
+                    org_id, session_id, self._sample_event(f"concurrent-{i}")
+                )
+            except Exception as exc:
+                errors.append(str(exc))
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            results = [
+                r for r in pool.map(write, range(5)) if r is not None
+            ]
+
+        assert not errors, f"Concurrent append_trace raised exceptions: {errors}"
+        assert len(results) == 5, f"Expected 5 successful writes, got {len(results)}"
+
+        proof = self.audit.verify_chain(org_id, session_id)
+        assert proof["chain_valid"] is True, (
+            f"Chain broken after concurrent writes: {proof['breaks']}"
+        )
+        assert proof["hmac_valid"] is True, (
+            f"HMAC invalid after concurrent writes: {proof['breaks']}"
+        )
+        assert proof["event_count"] == 5, (
+            f"Expected 5 events in chain, got {proof['event_count']}"
+        )
+        assert proof["breaks"] == [], f"Unexpected breaks: {proof['breaks']}"
+
+        seq_nums = sorted(ev["seq_num"] for ev in proof["events"])
+        assert seq_nums == list(range(5)), (
+            f"seq_nums must be 0–4 with no gaps or duplicates. Got: {seq_nums}"
+        )

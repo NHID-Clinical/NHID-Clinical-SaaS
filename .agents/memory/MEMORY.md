@@ -5,3 +5,4 @@
 - [NHID Clinical dark design system](nhid-clinical-design.md) — approved glassmorphism tokens; force `.dark` class via useEffect in App.tsx; Raleway font; bg #070c17; teal #00c2a8; cyan #53d8fb.
 - [NHID proof events access bug](nhid-proof-events.md) — proof.trace is `{ events: [...] }` not a flat array; access via `(proof.trace as any)?.events`, not `Array.isArray(proof.trace)`.
 - [SaaS DB now PostgreSQL](saas-postgres-migration.md) — saas_layer fully migrated from SQLite to Replit PostgreSQL; db.py is the single connection module; psycopg2-binary in requirements.txt; %s placeholders; append-only triggers on audit_traces preserved as Postgres functions.
+- [Audit chain concurrent write bug](audit-chain-concurrency.md) — SELECT FOR UPDATE cannot lock non-existent rows; use pg_advisory_xact_lock(hashtext(org_id)) instead to serialize first-insert races.
