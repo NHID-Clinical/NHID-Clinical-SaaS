@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import {
   Shield, CheckCircle, XCircle, Copy, Check, ArrowRight,
   Zap, RefreshCw, ChevronDown, ChevronRight, ExternalLink,
-  AlertTriangle, Layers, Lock, Phone, User, Bot,
+  AlertTriangle, Layers, Lock, Phone, User, Bot, Link2, Globe,
 } from "lucide-react";
 
 const SAAS = "/saas-api/saas";
@@ -154,6 +154,53 @@ type VoiceTurnResult = {
   reason_code: string | null;
   event_hash: string;
 };
+
+type WebhookProvider = "retell" | "vapi" | "twilio" | "generic";
+
+type WebhookTurnResult = {
+  text: string;
+  label: string;
+  action: string;
+  reason_code: string | null;
+  event_hash: string;
+};
+
+type WebhookIncomingResult = {
+  session_id: string;
+  provider: string;
+  provider_call_id: string | null;
+  action: string;
+  disclosure_text: string;
+};
+
+// ── Webhook payload factories ──────────────────────────────────────────────────
+// Produce the exact JSON body each provider posts to your webhook URL.
+
+function makeIncomingPayload(provider: WebhookProvider, callId: string): object {
+  switch (provider) {
+    case "retell":
+      return { call_id: callId, event: "call_started", agent_id: "agent_nhid_demo", from_number: "+12025551234", to_number: "+18005550100", call_type: "phone_call" };
+    case "vapi":
+      return { message: { type: "call-start", call: { id: callId, assistantId: "asst_nhid_demo", customer: { number: "+12025551234" }, type: "inboundPhoneCall", phoneNumberId: "pn_demo_001" } } };
+    case "twilio":
+      return { CallSid: callId, CallStatus: "initiated", From: "+12025551234", To: "+18005550100", Direction: "inbound", ApiVersion: "2010-04-01" };
+    default:
+      return { caller_id: "+12025551234", metadata: { source: "generic", demo: true } };
+  }
+}
+
+function makeTranscriptPayload(provider: WebhookProvider, callId: string, text: string, turn: number, sessionId: string): object {
+  switch (provider) {
+    case "retell":
+      return { call_id: callId, event: "transcript", turn_number: turn, transcript: [{ role: "user", content: text }] };
+    case "vapi":
+      return { message: { type: "transcript", transcript: text, sequenceId: turn, call: { id: callId } } };
+    case "twilio":
+      return { CallSid: callId, SpeechResult: text, SequenceNumber: String(turn), Confidence: "0.95" };
+    default:
+      return { session_id: sessionId, transcript_text: text, turn_number: turn };
+  }
+}
 
 // ── Small components ───────────────────────────────────────────────────────────
 
@@ -475,6 +522,14 @@ export default function TryPage() {
   const [voiceProofLoading, setVoiceProofLoading] = useState(false);
   const voiceAbort = useRef(false);
 
+  const [webhookOpen, setWebhookOpen] = useState(false);
+  const [webhookProvider, setWebhookProvider] = useState<WebhookProvider>("retell");
+  const [webhookRunning, setWebhookRunning] = useState(false);
+  const [webhookIncoming, setWebhookIncoming] = useState<WebhookIncomingResult | null>(null);
+  const [webhookTurns, setWebhookTurns] = useState<WebhookTurnResult[]>([]);
+  const [webhookError, setWebhookError] = useState<string | null>(null);
+  const webhookAbort = useRef(false);
+
   const startVoiceCall = useCallback(async () => {
     if (!org) return;
     voiceAbort.current = false;
@@ -554,6 +609,60 @@ export default function TryPage() {
       setVoiceProofLoading(false);
     }
   }, [org, voiceSessionId]);
+
+  const startWebhookSim = useCallback(async () => {
+    if (!org) return;
+    webhookAbort.current = false;
+    setWebhookRunning(true);
+    setWebhookError(null);
+    setWebhookIncoming(null);
+    setWebhookTurns([]);
+
+    const callId = `${webhookProvider}_${Math.random().toString(36).slice(2, 10)}`;
+    const WHBASE = `${SAAS}/voice/webhook`;
+
+    try {
+      const inRes = await fetch(`${WHBASE}/incoming?api_key=${org.api_key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(makeIncomingPayload(webhookProvider, callId)),
+      });
+      if (!inRes.ok) {
+        const b = await inRes.json().catch(() => ({}));
+        throw new Error((b as any).detail || `Error ${inRes.status}`);
+      }
+      const inData: WebhookIncomingResult = await inRes.json();
+      setWebhookIncoming(inData);
+
+      for (let i = 0; i < VOICE_TURNS.length; i++) {
+        if (webhookAbort.current) break;
+        await new Promise(r => setTimeout(r, 800));
+        if (webhookAbort.current) break;
+        const turn = VOICE_TURNS[i];
+        const txRes = await fetch(`${WHBASE}/transcript?api_key=${org.api_key}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(makeTranscriptPayload(webhookProvider, callId, turn.text, i + 1, inData.session_id)),
+        });
+        if (!txRes.ok) {
+          const b = await txRes.json().catch(() => ({}));
+          throw new Error((b as any).detail || `Error ${txRes.status}`);
+        }
+        const txData = await txRes.json();
+        setWebhookTurns(prev => [...prev, {
+          text: turn.text,
+          label: turn.label,
+          action: txData.action,
+          reason_code: txData.reason_code,
+          event_hash: txData.event_hash,
+        }]);
+      }
+    } catch (e: any) {
+      setWebhookError(e.message || "Webhook simulation failed");
+    } finally {
+      setWebhookRunning(false);
+    }
+  }, [org, webhookProvider]);
 
   const resetSession = () => {
     setSessionId(genSessionId());
@@ -1217,6 +1326,230 @@ export default function TryPage() {
                   }
                   {voiceRunning ? "Running call simulation…" : "Start Simulated Call"}
                 </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Webhook Integration card */}
+        {org && (
+          <div style={{ ...card(), marginBottom: 16, overflow: "hidden" }}>
+            <button
+              onClick={() => setWebhookOpen(o => !o)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", gap: 12,
+                padding: "18px 22px", background: "none", border: "none", cursor: "pointer",
+                textAlign: "left", fontFamily: "'Raleway', sans-serif",
+              }}
+            >
+              <div style={{
+                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                background: webhookTurns.length > 0 ? "rgba(83,216,251,0.2)" : "rgba(255,255,255,0.07)",
+                border: `1px solid ${webhookTurns.length > 0 ? "rgba(83,216,251,0.4)" : "rgba(255,255,255,0.12)"}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <Link2 size={13} color={webhookTurns.length > 0 ? "#53d8fb" : "#64748b"} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "var(--nhid-text)" }}>
+                  Webhook Integration
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                  Connect Retell AI, Vapi, or Twilio — payloads auto-detected and normalised
+                </div>
+              </div>
+              <span style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+                padding: "3px 8px", borderRadius: 5,
+                background: "rgba(83,216,251,0.1)", color: "#53d8fb",
+                border: "1px solid rgba(83,216,251,0.2)", marginRight: 8,
+              }}>
+                INTEGRATION
+              </span>
+              {webhookOpen ? <ChevronDown size={16} color="#475569" /> : <ChevronRight size={16} color="#475569" />}
+            </button>
+
+            {webhookOpen && (
+              <div style={{ padding: "0 22px 22px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+
+                {/* Provider tabs */}
+                <div style={{ marginTop: 18, marginBottom: 18 }}>
+                  <div style={{ fontSize: 10, color: "#475569", fontWeight: 700, letterSpacing: "0.08em", marginBottom: 10 }}>
+                    SELECT VOICE PLATFORM
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {(["retell", "vapi", "twilio", "generic"] as WebhookProvider[]).map(p => {
+                      const labels: Record<WebhookProvider, string> = { retell: "Retell AI", vapi: "Vapi", twilio: "Twilio", generic: "Generic / Custom" };
+                      const colors: Record<WebhookProvider, string> = { retell: "#a78bfa", vapi: "#53d8fb", twilio: "#ef4444", generic: "#00c2a8" };
+                      const active = webhookProvider === p;
+                      return (
+                        <button
+                          key={p}
+                          onClick={() => { setWebhookProvider(p); setWebhookIncoming(null); setWebhookTurns([]); setWebhookError(null); }}
+                          style={{
+                            padding: "7px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+                            fontFamily: "'Raleway', sans-serif", cursor: "pointer",
+                            background: active ? `${colors[p]}18` : "rgba(255,255,255,0.03)",
+                            border: `1px solid ${active ? colors[p] + "50" : "rgba(255,255,255,0.08)"}`,
+                            color: active ? colors[p] : "#475569",
+                            transition: "all 0.15s",
+                          }}
+                        >
+                          {labels[p]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Payload preview */}
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 10, color: "#475569", fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>
+                    INCOMING CALL PAYLOAD · what {webhookProvider === "generic" ? "your app" : webhookProvider.charAt(0).toUpperCase() + webhookProvider.slice(1)} sends
+                  </div>
+                  <div style={{
+                    background: "rgba(0,0,0,0.3)", borderRadius: 10, padding: "12px 14px",
+                    border: "1px solid rgba(255,255,255,0.06)", position: "relative",
+                  }}>
+                    <CopyBtn value={JSON.stringify(makeIncomingPayload(webhookProvider, `${webhookProvider}_call_example`), null, 2)} size={11} />
+                    <pre style={{
+                      margin: 0, fontSize: 10, color: "#94a3b8", fontFamily: "monospace",
+                      lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-all",
+                    }}>
+                      {JSON.stringify(makeIncomingPayload(webhookProvider, `${webhookProvider}_call_example`), null, 2)}
+                    </pre>
+                  </div>
+                </div>
+
+                {/* Disclosure banner */}
+                {webhookIncoming && (
+                  <div style={{
+                    marginBottom: 14, padding: "12px 14px", borderRadius: 10,
+                    background: "rgba(83,216,251,0.06)", border: "1px solid rgba(83,216,251,0.2)",
+                    display: "flex", gap: 10, alignItems: "flex-start",
+                  }}>
+                    <Bot size={14} color="#53d8fb" style={{ flexShrink: 0, marginTop: 2 }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#53d8fb", letterSpacing: "0.08em", marginBottom: 4 }}>
+                        NHID RESPONSE · session created · provider: {webhookIncoming.provider}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#e2e8f0", lineHeight: 1.6, marginBottom: 6 }}>
+                        "{webhookIncoming.disclosure_text}"
+                      </div>
+                      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                        <div>
+                          <span style={{ fontSize: 9, color: "#475569" }}>session_id </span>
+                          <code style={{ fontSize: 9, color: "#53d8fb", fontFamily: "monospace" }}>{webhookIncoming.session_id}</code>
+                        </div>
+                        {webhookIncoming.provider_call_id && (
+                          <div>
+                            <span style={{ fontSize: 9, color: "#475569" }}>provider_call_id </span>
+                            <code style={{ fontSize: 9, color: "#a78bfa", fontFamily: "monospace" }}>{webhookIncoming.provider_call_id}</code>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Turn results */}
+                {webhookTurns.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+                    {webhookTurns.map((turn, i) => {
+                      const aC = turn.action === "allow" ? "#00c2a8" : turn.action === "escalate" ? "#ef4444" : turn.action === "disclose" ? "#fbbd24" : "#94a3b8";
+                      const aBg = turn.action === "allow" ? "rgba(0,194,168,0.07)" : turn.action === "escalate" ? "rgba(239,68,68,0.07)" : turn.action === "disclose" ? "rgba(251,189,36,0.07)" : "rgba(148,163,184,0.07)";
+                      return (
+                        <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 9, background: aBg, border: `1px solid ${aC}20`, animation: i === webhookTurns.length - 1 ? "slideIn 0.3s ease" : "none" }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 9, color: "#475569", fontWeight: 700, marginBottom: 3 }}>
+                              {turn.label.toUpperCase()} · Turn {i + 1}
+                            </div>
+                            <div style={{ fontSize: 11, color: "#cbd5e1" }}>"{turn.text}"</div>
+                            {turn.event_hash && (
+                              <code style={{ fontSize: 9, color: "#334155", fontFamily: "monospace" }}>
+                                hash {turn.event_hash.slice(0, 16)}…
+                              </code>
+                            )}
+                          </div>
+                          <span style={{
+                            flexShrink: 0, padding: "3px 9px", borderRadius: 99, fontSize: 10, fontWeight: 800,
+                            background: aBg, color: aC, border: `1px solid ${aC}30`,
+                            letterSpacing: "0.06em", textTransform: "uppercase",
+                          }}>
+                            {turn.action}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {webhookError && (
+                  <div style={{ marginBottom: 12, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <AlertTriangle size={13} color="#ef4444" style={{ flexShrink: 0, marginTop: 2 }} />
+                    <span style={{ fontSize: 12, color: "#fca5a5" }}>{webhookError}</span>
+                  </div>
+                )}
+
+                {/* Simulate button */}
+                <button
+                  onClick={startWebhookSim}
+                  disabled={webhookRunning}
+                  style={{
+                    width: "100%", padding: "13px", borderRadius: 10, fontSize: 14, fontWeight: 800,
+                    background: webhookRunning ? "rgba(83,216,251,0.25)" : "linear-gradient(135deg, #3b82f6, #53d8fb)",
+                    border: "none", color: "#070c17",
+                    cursor: webhookRunning ? "not-allowed" : "pointer",
+                    fontFamily: "'Raleway', sans-serif",
+                    boxShadow: webhookRunning ? "none" : "0 0 28px rgba(83,216,251,0.25)",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 9,
+                    transition: "all 0.2s", marginBottom: 20,
+                  }}
+                >
+                  {webhookRunning
+                    ? <RefreshCw size={15} style={{ animation: "spin 1s linear infinite" }} />
+                    : <Link2 size={15} />
+                  }
+                  {webhookRunning ? "Firing webhooks…" : `Simulate ${webhookProvider.charAt(0).toUpperCase() + webhookProvider.slice(1)} Webhook Flow`}
+                </button>
+
+                {/* Setup instructions */}
+                <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "16px", border: "1px solid rgba(255,255,255,0.05)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                    <Globe size={13} color="#64748b" />
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                      Configure in {webhookProvider === "generic" ? "your platform" : webhookProvider.charAt(0).toUpperCase() + webhookProvider.slice(1)}
+                    </span>
+                  </div>
+                  {[
+                    { label: "Incoming call URL", path: "/voice/webhook/incoming" },
+                    { label: "Transcript URL", path: "/voice/webhook/transcript" },
+                  ].map(({ label, path }) => (
+                    <div key={path} style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 9, color: "#475569", marginBottom: 4 }}>{label}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(0,0,0,0.3)", borderRadius: 7, padding: "7px 10px", border: "1px solid rgba(255,255,255,0.04)" }}>
+                        <code style={{ flex: 1, fontSize: 9, color: "#53d8fb", fontFamily: "monospace", wordBreak: "break-all" }}>
+                          {`${window.location.origin}/saas-api/saas${path}?api_key=${org.api_key.slice(0, 10)}…`}
+                        </code>
+                        <CopyBtn value={`${window.location.origin}/saas-api/saas${path}?api_key=${org.api_key}`} size={10} />
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{ marginTop: 12, fontSize: 11, color: "#475569", lineHeight: 1.7 }}>
+                    {webhookProvider === "retell" && <>
+                      In Retell dashboard → <strong style={{ color: "#94a3b8" }}>Agent → Webhook URL</strong> → paste the Incoming Call URL above. Enable <strong style={{ color: "#94a3b8" }}>transcript</strong> events and set the Transcript URL. Your api_key is already embedded in both URLs.
+                    </>}
+                    {webhookProvider === "vapi" && <>
+                      In Vapi dashboard → <strong style={{ color: "#94a3b8" }}>Assistant → Server URL</strong> → paste the Incoming Call URL. Enable <strong style={{ color: "#94a3b8" }}>call-start</strong> and <strong style={{ color: "#94a3b8" }}>transcript</strong> message types. Use the same URL for both — NHID auto-detects the event type.
+                    </>}
+                    {webhookProvider === "twilio" && <>
+                      In your TwiML or Twilio Studio flow, set the <strong style={{ color: "#94a3b8" }}>Status Callback</strong> to the Incoming Call URL and use a <strong style={{ color: "#94a3b8" }}>&lt;Gather&gt;</strong> or <strong style={{ color: "#94a3b8" }}>&lt;Record transcribeCallback&gt;</strong> pointing to the Transcript URL.
+                    </>}
+                    {webhookProvider === "generic" && <>
+                      POST the incoming call body to the Incoming Call URL. Use the returned <strong style={{ color: "#94a3b8" }}>session_id</strong> as the <code style={{ color: "#53d8fb", fontFamily: "monospace" }}>session_id</code> field in all subsequent transcript payloads.
+                    </>}
+                  </div>
+                </div>
               </div>
             )}
           </div>

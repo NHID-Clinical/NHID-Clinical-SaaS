@@ -32,7 +32,7 @@ _CLINICAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _CLINICAL_DIR not in sys.path:
     sys.path.insert(0, _CLINICAL_DIR)
 
-from fastapi import FastAPI, HTTPException, Header, Request, Depends
+from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
@@ -67,6 +67,10 @@ from saas_layer import nhid_client
 # Not persisted — lives for the duration of the process.
 _voice_sessions: Dict[str, Dict] = {}
 _voice_lock = threading.Lock()
+# Maps provider call_id (Retell/Vapi/Twilio) → NHID session_id.
+# Protected by _voice_lock. Allows /webhook/transcript to look up sessions
+# using the provider's own call identifier instead of our internal UUID.
+_call_id_map: Dict[str, str] = {}
 
 _ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
 
@@ -869,6 +873,315 @@ async def update_voice_policy(
     saved = voice_policy_store.save_ruleset(org["org_id"], ruleset)
     log_request(org["org_id"], "/saas/voice/policy", "PUT", 200, None)
     return saved
+
+
+# ── Voice webhook: provider normalisation ─────────────────────────────────────
+#
+# Retell AI    — top-level "call_id" + "event" fields
+# Vapi         — top-level "message" dict with "type" field
+# Twilio       — "CallSid" field (form-encoded or JSON)
+# Generic      — our own format (caller_id / session_id)
+#
+# All webhook endpoints authenticate via ?api_key= query param so the URL you
+# paste into Retell/Vapi/Twilio already carries the credential:
+#   https://<domain>/saas-api/saas/voice/webhook/incoming?api_key=<key>
+
+def _detect_webhook_provider(body: Dict[str, Any]) -> str:
+    if "call_id" in body and ("event" in body or "event_type" in body):
+        return "retell"
+    if isinstance(body.get("message"), dict) and "type" in body.get("message", {}):
+        return "vapi"
+    if "CallSid" in body:
+        return "twilio"
+    return "generic"
+
+
+def _normalize_incoming_webhook(body: Dict[str, Any]) -> Dict[str, Any]:
+    p = _detect_webhook_provider(body)
+    if p == "retell":
+        return {
+            "caller_id": body.get("from_number") or body.get("call_id"),
+            "provider_call_id": body.get("call_id"),
+            "provider": "retell",
+            "metadata": {k: body[k] for k in ("agent_id", "call_type", "from_number", "to_number") if body.get(k)},
+        }
+    if p == "vapi":
+        msg = body.get("message") or {}
+        call = msg.get("call") or body.get("call") or {}
+        customer = call.get("customer") or {}
+        return {
+            "caller_id": customer.get("number") or call.get("id"),
+            "provider_call_id": call.get("id"),
+            "provider": "vapi",
+            "metadata": {k: v for k, v in {
+                "assistant_id": call.get("assistantId"),
+                "call_type": call.get("type"),
+                "phone_number_id": call.get("phoneNumberId"),
+            }.items() if v},
+        }
+    if p == "twilio":
+        return {
+            "caller_id": body.get("From"),
+            "provider_call_id": body.get("CallSid"),
+            "provider": "twilio",
+            "metadata": {k: body[k] for k in ("To", "CallStatus", "Direction") if body.get(k)},
+        }
+    return {
+        "caller_id": body.get("caller_id"),
+        "provider_call_id": None,
+        "provider": "generic",
+        "metadata": body.get("metadata") or {},
+    }
+
+
+def _normalize_transcript_webhook(body: Dict[str, Any]) -> Dict[str, Any]:
+    p = _detect_webhook_provider(body)
+    if p == "retell":
+        call_id = body.get("call_id")
+        transcript = body.get("transcript") or []
+        if isinstance(transcript, list) and transcript:
+            last = transcript[-1] if isinstance(transcript[-1], dict) else {}
+            text: str = last.get("content") or last.get("text") or ""
+            turn_num: int = len(transcript)
+        elif isinstance(transcript, str):
+            text = transcript
+            turn_num = body.get("turn_number") or 1
+        else:
+            text = body.get("content") or ""
+            turn_num = body.get("turn_number") or 1
+        return {"provider_call_id": call_id, "transcript_text": text, "turn_number": turn_num, "provider": "retell"}
+    if p == "vapi":
+        msg = body.get("message") or {}
+        call = msg.get("call") or body.get("call") or {}
+        return {
+            "provider_call_id": call.get("id"),
+            "transcript_text": msg.get("transcript") or msg.get("text") or "",
+            "turn_number": msg.get("sequenceId") or 1,
+            "provider": "vapi",
+        }
+    if p == "twilio":
+        return {
+            "provider_call_id": body.get("CallSid"),
+            "transcript_text": body.get("SpeechResult") or body.get("TranscriptionText") or "",
+            "turn_number": int(body.get("SequenceNumber") or 1),
+            "provider": "twilio",
+        }
+    return {
+        "provider_call_id": None,
+        "transcript_text": body.get("transcript_text") or "",
+        "turn_number": body.get("turn_number") or 1,
+        "provider": "generic",
+    }
+
+
+@app.post("/saas/voice/webhook/incoming", tags=["Voice Webhooks"])
+async def voice_webhook_incoming(
+    request: Request,
+    api_key: Optional[str] = Query(default=None),
+):
+    """
+    Webhook receiver for incoming calls from Retell AI, Vapi, Twilio, or any
+    platform that can POST to a URL.  Auto-detects the provider from the payload
+    shape, creates an NHID session, and returns the required AI disclosure.
+
+    Auth: add ?api_key=<your-key> to the URL you register in your provider's
+    dashboard — no custom headers needed.
+
+    Retell:  call_id + event at top level
+    Vapi:    message.type + message.call.id
+    Twilio:  CallSid field
+    Generic: caller_id or session_id fields
+
+    Returns { session_id, provider_call_id, provider, action, disclosure_text }.
+    Use provider_call_id to correlate subsequent transcript events.
+    """
+    if not api_key:
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "api_key query parameter required. "
+                "Webhook URL format: /saas/voice/webhook/incoming?api_key=<your-key>"
+            ),
+        )
+    org = validate_api_key(api_key)
+    if not org:
+        raise HTTPException(status_code=401, detail="Invalid or expired API key.")
+
+    try:
+        body: Dict[str, Any] = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON.")
+
+    norm = _normalize_incoming_webhook(body)
+    provider = norm["provider"]
+    caller_id = norm.get("caller_id")
+    provider_call_id = norm.get("provider_call_id")
+
+    session_id = str(uuid.uuid4())
+    with _voice_lock:
+        _voice_sessions[session_id] = {
+            "disclosure_confirmed": False,
+            "escalated": False,
+            "org_id": org["org_id"],
+        }
+        if provider_call_id:
+            _call_id_map[provider_call_id] = session_id
+
+    event = {
+        "event_type": "voice_session_start",
+        "state_before": "idle",
+        "state_after": "active",
+        "input_text": caller_id,
+        "policy_action": "disclose",
+        "reason_code": "REQUIRE_UPFRONT_DISCLOSURE",
+        "response_text": None,
+        "policy_version": "VOICE-POLICY-v1.0",
+    }
+    try:
+        nhid_client.append_event(session_id, [event], f"voice:start:{session_id}")
+    except nhid_client.NHIDClientError as exc:
+        _logger.warning("voice_webhook_incoming nhid append skipped: %s", exc)
+
+    try:
+        audit_svc.append_trace(org_id=org["org_id"], session_id=session_id, event=event)
+    except Exception as exc:
+        _logger.error("voice_webhook_incoming audit FAILED org=%s session=%s: %s",
+                      org["org_id"], session_id, exc)
+        with _voice_lock:
+            _voice_sessions.pop(session_id, None)
+            if provider_call_id:
+                _call_id_map.pop(provider_call_id, None)
+        raise HTTPException(
+            status_code=500,
+            detail="Audit trace write failed. Voice session was not recorded in the tamper-evident log.",
+        )
+
+    log_request(org["org_id"], "/saas/voice/webhook/incoming", "POST", 200, session_id)
+    disclosure_text = (
+        f"This call is handled by an AI system operating on behalf of {org['org_name']}. "
+        "You may request a human agent at any time."
+    )
+    return {
+        "session_id": session_id,
+        "provider": provider,
+        "provider_call_id": provider_call_id,
+        "action": "disclose",
+        "disclosure_text": disclosure_text,
+        "normalized": {"caller_id": caller_id, "metadata": norm.get("metadata")},
+    }
+
+
+@app.post("/saas/voice/webhook/transcript", tags=["Voice Webhooks"])
+async def voice_webhook_transcript(
+    request: Request,
+    api_key: Optional[str] = Query(default=None),
+):
+    """
+    Webhook receiver for real-time transcript events from Retell, Vapi, Twilio, etc.
+
+    Auth: ?api_key=<your-key> in the webhook URL.
+
+    Session lookup order:
+      1. provider_call_id from the normalised payload → looked up in _call_id_map
+         (populated when /webhook/incoming was called for this call)
+      2. session_id field present directly in the body (generic / custom format)
+
+    Returns the same { action, reason_code, session_id, event_hash } shape as
+    /saas/voice/transcript, plus provider and provider_call_id echo-back.
+    """
+    if not api_key:
+        raise HTTPException(status_code=401, detail="api_key query parameter required.")
+    org = validate_api_key(api_key)
+    if not org:
+        raise HTTPException(status_code=401, detail="Invalid or expired API key.")
+
+    try:
+        body: Dict[str, Any] = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON.")
+
+    norm = _normalize_transcript_webhook(body)
+    provider = norm["provider"]
+    provider_call_id = norm.get("provider_call_id")
+    transcript_text: str = norm.get("transcript_text") or ""
+    turn_number: int = norm.get("turn_number") or 1
+
+    with _voice_lock:
+        if provider_call_id:
+            session_id = _call_id_map.get(provider_call_id)
+        else:
+            session_id = body.get("session_id")
+
+        if not session_id:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No NHID session found for provider_call_id='{provider_call_id}'. "
+                    "Call POST /saas/voice/webhook/incoming first to register the call."
+                ),
+            )
+        session_state = _voice_sessions.get(session_id)
+        if session_state is None:
+            raise HTTPException(status_code=404, detail=f"Voice session '{session_id}' not found.")
+        if session_state.get("org_id") != org["org_id"]:
+            raise HTTPException(status_code=403, detail="Voice session does not belong to your organisation.")
+        state_snapshot = dict(session_state)
+
+    org_policy = voice_policy_store.get_effective_policy(org["org_id"])
+    decision = run_voice_policy(
+        transcript_text,
+        state_snapshot,
+        ruleset=org_policy["rules"],
+        policy_version=org_policy["version"],
+    )
+    action = decision["action"]
+    reason_code = decision["reason_code"]
+    policy_version = decision["policy_version"]
+
+    event = {
+        "event_type": "voice_transcript",
+        "state_before": "active",
+        "state_after": "escalated" if action == "escalate" else "active",
+        "input_text": transcript_text[:500],
+        "policy_action": action,
+        "reason_code": reason_code,
+        "response_text": None,
+        "policy_version": policy_version,
+    }
+    try:
+        nhid_client.append_event(session_id, [event], f"voice:transcript:{session_id}:{turn_number}")
+    except nhid_client.NHIDClientError as exc:
+        _logger.warning("voice_webhook_transcript nhid append skipped: %s", exc)
+
+    try:
+        result = audit_svc.append_trace(org_id=org["org_id"], session_id=session_id, event=event)
+        event_hash = result.get("event_hash", "")
+    except Exception as exc:
+        _logger.error("voice_webhook_transcript audit FAILED org=%s session=%s: %s",
+                      org["org_id"], session_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Audit trace write failed. Enforcement decision was not recorded.",
+        )
+
+    with _voice_lock:
+        if session_id in _voice_sessions:
+            if action in ("allow", "disclose"):
+                _voice_sessions[session_id]["disclosure_confirmed"] = True
+            elif action == "escalate":
+                _voice_sessions[session_id]["disclosure_confirmed"] = True
+                _voice_sessions[session_id]["escalated"] = True
+
+    log_request(org["org_id"], "/saas/voice/webhook/transcript", "POST", 200, session_id)
+    return {
+        "action": action,
+        "reason_code": reason_code,
+        "session_id": session_id,
+        "provider": provider,
+        "provider_call_id": provider_call_id,
+        "event_hash": event_hash,
+        "normalized": {"transcript_text": transcript_text, "turn_number": turn_number},
+    }
 
 
 # ── Usage: stats + activity ───────────────────────────────────────────────────
