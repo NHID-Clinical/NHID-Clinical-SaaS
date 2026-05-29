@@ -14,12 +14,14 @@ Production execution graph:
 Core files (app.py, nhid_engine, nhid_policy, nhid_event_store, tests/) are
 never modified by this layer.
 """
+import asyncio
 import logging
 import os
 import sys
 import uuid
 import time
 import threading
+from contextlib import asynccontextmanager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +64,7 @@ from saas_layer.voice_sessions import (
     create_voice_session,
     delete_voice_session,
     get_voice_session_for_update,
+    purge_old_sessions,
     update_voice_session_in_tx,
 )
 from saas_layer.db import get_conn
@@ -84,10 +87,61 @@ _ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 _ADMIN_PASS = os.environ.get("ADMIN_PASS", "nhidclinical1626")
 _ADMIN_SESSION_TTL = 8 * 3600  # 8 hours
 
+# ── Voice session TTL config ───────────────────────────────────────────────────
+# Sessions older than _VOICE_SESSION_TTL_HOURS are eligible for purging.
+# _VOICE_SESSION_PURGE_INTERVAL is how often (in seconds) the background task
+# wakes up to run the purge.  Both are configurable via environment variables.
+_VOICE_SESSION_TTL_HOURS: int = int(os.environ.get("VOICE_SESSION_TTL_HOURS", "24"))
+_VOICE_SESSION_PURGE_INTERVAL: int = int(
+    os.environ.get("VOICE_SESSION_PURGE_INTERVAL_SECS", str(6 * 3600))
+)
+
+_logger = logging.getLogger(__name__)
+
+
+async def _voice_session_cleanup_loop() -> None:
+    """
+    Background coroutine: purges voice_sessions rows older than
+    _VOICE_SESSION_TTL_HOURS.  Runs once at startup (with a short initial
+    delay so the server is fully up) then every _VOICE_SESSION_PURGE_INTERVAL
+    seconds.
+    """
+    await asyncio.sleep(10)  # let startup finish before first purge
+    while True:
+        try:
+            deleted = await asyncio.get_event_loop().run_in_executor(
+                None, purge_old_sessions, _VOICE_SESSION_TTL_HOURS
+            )
+            _logger.info(
+                "voice_session_cleanup: purged %d sessions (ttl=%dh, next in %ds)",
+                deleted,
+                _VOICE_SESSION_TTL_HOURS,
+                _VOICE_SESSION_PURGE_INTERVAL,
+            )
+        except Exception as exc:
+            _logger.warning("voice_session_cleanup error (will retry): %s", exc)
+        await asyncio.sleep(_VOICE_SESSION_PURGE_INTERVAL)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Start background cleanup task; yield to serve requests; cancel on shutdown."""
+    task = asyncio.create_task(_voice_session_cleanup_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 app = FastAPI(
     title="NHID-Clinical SaaS API",
     description="Multi-tenant audit platform powered by NHID core engine.",
     version="2.0.0",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(

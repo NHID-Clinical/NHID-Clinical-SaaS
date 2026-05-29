@@ -138,7 +138,24 @@ class TestRunVoicePolicy:
 # writing to the real database during tests.
 
 from fastapi.testclient import TestClient
-from saas_layer.gateway import app, get_current_org, _voice_sessions
+from saas_layer.gateway import app, get_current_org
+from saas_layer.db import get_conn as _get_conn
+
+
+def _fetch_voice_session(session_id: str):
+    """Return the voice_sessions row for *session_id* as a dict, or None."""
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT session_id, org_id, disclosure_confirmed, escalated "
+            "FROM voice_sessions WHERE session_id = %s",
+            (session_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
 
 _FAKE_ORG = {
     "org_id": "test-org-alpha",
@@ -161,10 +178,21 @@ _MOCK_AUDIT_RETURN = {"event_hash": "deadbeef00000000000000000000000000000000000
 
 @pytest.fixture(autouse=True)
 def isolate_voice_sessions():
-    """Clear in-memory voice sessions before and after every test."""
-    _voice_sessions.clear()
+    """Delete test org voice sessions from PostgreSQL before and after every test."""
+    _test_org_ids = (_FAKE_ORG["org_id"], _FAKE_ORG_2["org_id"])
+    def _clean():
+        conn = _get_conn()
+        try:
+            with conn:
+                conn.cursor().execute(
+                    "DELETE FROM voice_sessions WHERE org_id = ANY(%s)",
+                    (list(_test_org_ids),),
+                )
+        finally:
+            conn.close()
+    _clean()
     yield
-    _voice_sessions.clear()
+    _clean()
 
 
 @pytest.fixture
@@ -208,12 +236,13 @@ class TestVoiceIncoming:
         r = client.post("/saas/voice/incoming", json={})
         assert "AI system" in r.json()["disclosure_text"]
 
-    def test_session_stored_in_memory(self, client):
+    def test_session_stored_in_db(self, client):
         r = client.post("/saas/voice/incoming", json={})
         sid = r.json()["session_id"]
-        assert sid in _voice_sessions
-        assert _voice_sessions[sid]["disclosure_confirmed"] is False
-        assert _voice_sessions[sid]["org_id"] == _FAKE_ORG["org_id"]
+        row = _fetch_voice_session(sid)
+        assert row is not None, "session row must be persisted to voice_sessions table"
+        assert row["disclosure_confirmed"] is False
+        assert row["org_id"] == _FAKE_ORG["org_id"]
 
     def test_requires_api_key_header(self):
         """No override active — real auth dependency should fire 401."""
@@ -232,7 +261,17 @@ class TestVoiceIncoming:
             r = TestClient(app).post("/saas/voice/incoming", json={})
         app.dependency_overrides.pop(get_current_org, None)
         assert r.status_code == 500
-        assert len(_voice_sessions) == 0, "rolled-back session must not remain in memory"
+        # Session must have been rolled back — no row in DB for this org
+        conn = _get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM voice_sessions WHERE org_id = %s",
+                (_FAKE_ORG["org_id"],),
+            )
+            assert cur.fetchone()["n"] == 0, "rolled-back session must not remain in DB"
+        finally:
+            conn.close()
 
 
 # ── POST /saas/voice/transcript ───────────────────────────────────────────────
@@ -272,7 +311,9 @@ class TestVoiceTranscript:
     def test_disclosure_confirmed_after_first_turn(self, client):
         sid = self._start(client)
         self._transcript(client, sid, "Hello", turn=1)
-        assert _voice_sessions[sid]["disclosure_confirmed"] is True
+        row = _fetch_voice_session(sid)
+        assert row is not None
+        assert row["disclosure_confirmed"] is True
 
     # ── allow after disclosure ────────────────────────────────────────────────
 
@@ -302,7 +343,9 @@ class TestVoiceTranscript:
         sid = self._start(client)
         self._transcript(client, sid, "Hello", turn=1)
         self._transcript(client, sid, "speak to a human", turn=2)
-        assert _voice_sessions[sid]["escalated"] is True
+        row = _fetch_voice_session(sid)
+        assert row is not None
+        assert row["escalated"] is True
 
     # ── full multi-turn state machine ─────────────────────────────────────────
 

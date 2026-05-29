@@ -19,8 +19,11 @@ Transactional read-modify-write pattern (used by voice_transcript):
 SELECT ... FOR UPDATE serialises concurrent requests for the same session_id
 so no two workers can make conflicting policy decisions simultaneously.
 """
+import logging
 from typing import Dict, Any, Optional
 from saas_layer.db import get_conn
+
+logger = logging.getLogger(__name__)
 
 
 def create_voice_session(session_id: str, org_id: str) -> None:
@@ -102,3 +105,32 @@ def delete_voice_session(session_id: str) -> None:
             )
     finally:
         conn.close()
+
+
+def purge_old_sessions(ttl_hours: int = 24) -> int:
+    """
+    Delete voice_sessions rows whose created_at is older than *ttl_hours*.
+
+    Uses the ``idx_vs_created_at`` index so the DELETE is efficient even on
+    large tables.  Returns the number of rows deleted.
+
+    This function opens and closes its own connection and is safe to call
+    from any thread or asyncio task without holding any application lock.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                DELETE FROM voice_sessions
+                WHERE created_at < NOW() - INTERVAL '%s hours'
+                """,
+                (ttl_hours,),
+            )
+            deleted = cur.rowcount
+    finally:
+        conn.close()
+    if deleted:
+        logger.info("voice_sessions purge: removed %d rows older than %dh", deleted, ttl_hours)
+    return deleted

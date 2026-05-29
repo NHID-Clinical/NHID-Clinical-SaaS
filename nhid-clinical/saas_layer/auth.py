@@ -108,6 +108,10 @@ def init_db() -> None:
                     ON voice_sessions (org_id)
             """)
             cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_vs_created_at
+                    ON voice_sessions (created_at)
+            """)
+            cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_usage_org
                     ON usage_log (org_id, timestamp)
             """)
