@@ -64,6 +64,65 @@ def init_db() -> None:
     from saas_layer.stripe_billing import migrate_billing_columns
     migrate_billing_columns()
 
+    # Add cryptographic audit_traces table + append-only triggers (idempotent)
+    migrate_audit_traces()
+
+
+def migrate_audit_traces() -> None:
+    """
+    Idempotent migration: create audit_traces table + append-only triggers.
+    Safe to call multiple times — uses IF NOT EXISTS throughout.
+    """
+    conn = _get_conn()
+    with conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_traces (
+                event_id        TEXT     NOT NULL PRIMARY KEY
+                                         DEFAULT (lower(hex(randomblob(16)))),
+                session_id      TEXT     NOT NULL,
+                org_id          TEXT     NOT NULL,
+                seq_num         INTEGER  NOT NULL,
+                event_type      TEXT     NOT NULL,
+                state_before    TEXT     NOT NULL,
+                state_after     TEXT     NOT NULL,
+                input_text      TEXT,
+                policy_action   TEXT,
+                reason_code     TEXT,
+                response_text   TEXT,
+                policy_version  TEXT,
+                model_version   TEXT,
+                timestamp       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                prev_hash       TEXT     NOT NULL,
+                event_hash      TEXT     NOT NULL,
+                hmac_signature  TEXT     NOT NULL,
+                created_at      DATETIME          DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_at_org_seq
+                ON audit_traces (org_id, seq_num)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_at_org_session
+                ON audit_traces (org_id, session_id, seq_num)
+        """)
+        # Append-only enforcement: block UPDATE
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS audit_traces_no_update
+            BEFORE UPDATE ON audit_traces
+            BEGIN
+                SELECT RAISE(ABORT, 'audit_traces is append-only: UPDATE not permitted');
+            END
+        """)
+        # Append-only enforcement: block DELETE
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS audit_traces_no_delete
+            BEFORE DELETE ON audit_traces
+            BEGIN
+                SELECT RAISE(ABORT, 'audit_traces is append-only: DELETE not permitted');
+            END
+        """)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()

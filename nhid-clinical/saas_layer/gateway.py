@@ -54,6 +54,7 @@ from saas_layer.stripe_billing import (
     migrate_billing_columns,
 )
 from saas_layer.stripe_client import get_publishable_key
+from saas_layer import audit as audit_svc
 
 # NHID core is accessed via direct Python import (no Bridge HTTP dependency).
 from saas_layer import nhid_client
