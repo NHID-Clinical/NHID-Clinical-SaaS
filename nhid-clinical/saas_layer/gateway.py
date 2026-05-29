@@ -22,6 +22,7 @@ import uuid
 import time
 import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +64,7 @@ from saas_layer import voice_policy_store
 from saas_layer.voice_sessions import (
     create_voice_session,
     delete_voice_session,
+    extend_session as extend_voice_session,
     get_voice_session_for_update,
     list_voice_sessions,
     purge_old_sessions,
@@ -1366,27 +1368,112 @@ async def admin_portal_usage(_token: str = Depends(require_admin_session)):
     }
 
 
+def _enrich_with_ttl(session: dict, ttl_hours: int) -> dict:
+    """Add age_hours and hours_until_purge to a voice session row dict."""
+    created_at = session.get("created_at")
+    if isinstance(created_at, datetime):
+        now = datetime.now(timezone.utc) if created_at.tzinfo else datetime.utcnow()
+        age_h = (now - created_at).total_seconds() / 3600
+    else:
+        age_h = 0.0
+    return {
+        **session,
+        "created_at": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
+        "age_hours": round(age_h, 2),
+        "hours_until_purge": round(max(0.0, ttl_hours - age_h), 2),
+    }
+
+
 @app.get("/admin/voice/sessions", tags=["Admin"])
 async def admin_voice_sessions(
     org_id: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
+    escalated_only: bool = Query(default=False),
+    undisclosed_only: bool = Query(default=False),
     _token: str = Depends(require_admin_session),
 ):
     """
-    List recent voice sessions with their policy state.
+    List voice sessions with policy state and TTL metadata.
 
-    Optionally filter by org_id.  Escalated sessions are flagged so operators
-    can prioritise human handoff.  Returns up to *limit* rows (max 500),
-    ordered newest-first.
+    - Filter by org_id, escalated=True, or disclosure_confirmed=False.
+    - Each row includes age_hours and hours_until_purge so the UI can
+      surface sessions that are about to be cleaned up.
+    - Results are ordered newest-first, capped at *limit* (max 500).
     """
-    sessions = list_voice_sessions(org_id=org_id or None, limit=limit)
-    escalated_count = sum(1 for s in sessions if s.get("escalated"))
+    sessions = list_voice_sessions(
+        org_id=org_id or None,
+        limit=limit,
+        escalated_only=escalated_only,
+        undisclosed_only=undisclosed_only,
+    )
+    enriched = [_enrich_with_ttl(s, _VOICE_SESSION_TTL_HOURS) for s in sessions]
+    escalated_count = sum(1 for s in enriched if s.get("escalated"))
     return {
-        "sessions": sessions,
-        "total": len(sessions),
+        "sessions": enriched,
+        "total": len(enriched),
         "escalated_count": escalated_count,
         "filter_org_id": org_id or None,
+        "ttl_hours": _VOICE_SESSION_TTL_HOURS,
     }
+
+
+@app.post("/admin/voice/sessions/{session_id}/extend", tags=["Admin"])
+async def admin_extend_voice_session(
+    session_id: str,
+    _token: str = Depends(require_admin_session),
+):
+    """
+    Reset a voice session's created_at to NOW(), giving it a fresh TTL window.
+
+    Useful when an escalated session needs more time before auto-purge.
+    Returns the updated session row with recalculated TTL fields.
+    """
+    found = extend_voice_session(session_id)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Voice session '{session_id}' not found.")
+    # Re-fetch the single updated row for accurate timestamps
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT session_id, org_id, disclosure_confirmed, escalated, created_at "
+                "FROM voice_sessions WHERE session_id = %s",
+                (session_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Voice session '{session_id}' not found after extend.")
+    return _enrich_with_ttl(dict(row), _VOICE_SESSION_TTL_HOURS)
+
+
+@app.delete("/admin/voice/sessions/{session_id}", tags=["Admin"])
+async def admin_delete_voice_session(
+    session_id: str,
+    _token: str = Depends(require_admin_session),
+):
+    """
+    Force-delete a voice session row.
+
+    Use when a session is stale or was created in error and should not wait
+    for the scheduled TTL purge.  This is permanent and cannot be undone.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM voice_sessions WHERE session_id = %s",
+                (session_id,),
+            )
+            deleted = cur.rowcount
+    finally:
+        conn.close()
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail=f"Voice session '{session_id}' not found.")
+    return {"deleted": True, "session_id": session_id}
 
 
 @app.get("/admin/org/{org_id}")

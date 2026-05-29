@@ -93,41 +93,69 @@ def update_voice_session_in_tx(
 def list_voice_sessions(
     org_id: Optional[str] = None,
     limit: int = 100,
+    escalated_only: bool = False,
+    undisclosed_only: bool = False,
 ) -> list:
     """
     Return recent voice_sessions rows ordered by created_at DESC.
 
-    If *org_id* is given, only rows for that organisation are returned.
-    *limit* caps the result set (max 500 to prevent runaway queries).
+    Parameters
+    ----------
+    org_id : str, optional
+        Restrict to one organisation.
+    limit : int
+        Maximum rows (capped at 500).
+    escalated_only : bool
+        Only return sessions where escalated = TRUE.
+    undisclosed_only : bool
+        Only return sessions where disclosure_confirmed = FALSE.
     """
     limit = min(max(1, limit), 500)
+    filters, params = [], []
+    if org_id:
+        filters.append("org_id = %s")
+        params.append(org_id)
+    if escalated_only:
+        filters.append("escalated = TRUE")
+    if undisclosed_only:
+        filters.append("disclosure_confirmed = FALSE")
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+    params.append(limit)
     conn = get_conn()
     try:
         with conn:
             cur = conn.cursor()
-            if org_id:
-                cur.execute(
-                    """
-                    SELECT session_id, org_id, disclosure_confirmed, escalated, created_at
-                    FROM voice_sessions
-                    WHERE org_id = %s
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                    """,
-                    (org_id, limit),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT session_id, org_id, disclosure_confirmed, escalated, created_at
-                    FROM voice_sessions
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                    """,
-                    (limit,),
-                )
-            rows = cur.fetchall()
-            return [dict(r) for r in rows]
+            cur.execute(
+                f"""
+                SELECT session_id, org_id, disclosure_confirmed, escalated, created_at
+                FROM voice_sessions
+                {where}
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def extend_session(session_id: str) -> bool:
+    """
+    Reset created_at to NOW() so the session gets a fresh TTL window.
+
+    Call this when an escalated session needs more time before it is purged.
+    Returns True if the session existed and was updated, False if not found.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE voice_sessions SET created_at = NOW() WHERE session_id = %s",
+                (session_id,),
+            )
+            return cur.rowcount > 0
     finally:
         conn.close()
 

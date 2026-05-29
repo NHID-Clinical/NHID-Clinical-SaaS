@@ -41,6 +41,8 @@ interface VoiceSession {
   disclosure_confirmed: boolean;
   escalated: boolean;
   created_at: string;
+  age_hours: number;
+  hours_until_purge: number;
 }
 
 // ── Admin API ─────────────────────────────────────────────────────────────────
@@ -85,6 +87,22 @@ const COOLDOWN_SECONDS = 30;
 
 function fmt(ts: string) {
   try { return new Date(ts).toLocaleString(); } catch { return ts; }
+}
+function fmtHours(h: number): string {
+  if (h <= 0) return "< 1m";
+  if (h < 1) return `${Math.round(h * 60)}m`;
+  const hrs = Math.floor(h);
+  const mins = Math.round((h - hrs) * 60);
+  if (h < 24) return mins > 0 ? `${hrs}h ${mins}m` : `${hrs}h`;
+  const days = Math.floor(h / 24);
+  const remHrs = Math.floor(h % 24);
+  return remHrs > 0 ? `${days}d ${remHrs}h` : `${days}d`;
+}
+function expiryColor(h: number): string {
+  if (h < 2) return "#f87171";
+  if (h < 6) return "#fbbd24";
+  if (h < 12) return "#53d8fb";
+  return "#475569";
 }
 function mask(key: string) { return key.slice(0, 8) + "…" + key.slice(-4); }
 const planColor = (p: string) => ({ free: "#94a3b8", l1: "#00c2a8", l2: "#53d8fb", l3: "#fbbd24" }[p] ?? "#94a3b8");
@@ -344,6 +362,8 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
   const [tab, setTab] = useState<"orgs" | "activity" | "voice">("orgs");
   const [search, setSearch] = useState("");
   const [voiceOrgFilter, setVoiceOrgFilter] = useState("");
+  const [voiceStatusFilter, setVoiceStatusFilter] = useState<"all" | "escalated" | "undisclosed">("all");
+  const [voiceActionLoading, setVoiceActionLoading] = useState<Record<string, "extend" | "delete" | "confirm-delete">>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -379,6 +399,41 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
       return next;
     });
   };
+
+  const handleExtend = useCallback(async (sid: string) => {
+    setVoiceActionLoading(p => ({ ...p, [sid]: "extend" }));
+    try {
+      const updated = await adminFetch<VoiceSession>(`/voice/sessions/${sid}/extend`, token, { method: "POST" });
+      setVoiceSessions(prev => prev.map(s => s.session_id === sid ? updated : s));
+    } catch (err: any) {
+      setError(err.message ?? "Failed to extend session");
+    } finally {
+      setVoiceActionLoading(p => { const n = { ...p }; delete n[sid]; return n; });
+    }
+  }, [token]);
+
+  const handleForceDelete = useCallback((sid: string) => {
+    const state = voiceActionLoading[sid];
+    if (state !== "confirm-delete") {
+      setVoiceActionLoading(p => ({ ...p, [sid]: "confirm-delete" }));
+      setTimeout(() => {
+        setVoiceActionLoading(p => {
+          if (p[sid] === "confirm-delete") { const n = { ...p }; delete n[sid]; return n; }
+          return p;
+        });
+      }, 4000);
+      return;
+    }
+    setVoiceActionLoading(p => ({ ...p, [sid]: "delete" }));
+    const wasEscalated = voiceSessions.find(s => s.session_id === sid)?.escalated ?? false;
+    adminFetch(`/voice/sessions/${sid}`, token, { method: "DELETE" })
+      .then(() => {
+        setVoiceSessions(prev => prev.filter(s => s.session_id !== sid));
+        if (wasEscalated) setVoiceEscalatedCount(prev => Math.max(0, prev - 1));
+      })
+      .catch((err: any) => setError(err.message ?? "Failed to delete session"))
+      .finally(() => setVoiceActionLoading(p => { const n = { ...p }; delete n[sid]; return n; }));
+  }, [token, voiceActionLoading, voiceSessions]);
 
   const filteredOrgs = orgs.filter(o =>
     search === "" ||
@@ -664,30 +719,43 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
           </div>
         )}
 
-        {/* Voice Sessions filter */}
+        {/* Voice Sessions filters */}
         {tab === "voice" && (
-          <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
             <input
               value={voiceOrgFilter}
               onChange={e => setVoiceOrgFilter(e.target.value)}
               placeholder="Filter by org ID…"
               style={{
-                width: "100%", maxWidth: 360, padding: "9px 14px", borderRadius: 8,
+                padding: "8px 13px", borderRadius: 8, flex: "0 0 auto", minWidth: 200,
                 background: "rgba(255,255,255,0.04)", border: "1px solid rgba(0,194,168,0.12)",
-                color: "#e0e8f4", fontSize: 13, outline: "none",
-                fontFamily: "'Raleway', sans-serif",
+                color: "#e0e8f4", fontSize: 12, outline: "none", fontFamily: "'Raleway', sans-serif",
               }}
               onFocus={e => e.target.style.borderColor = "rgba(0,194,168,0.35)"}
               onBlur={e => e.target.style.borderColor = "rgba(0,194,168,0.12)"}
             />
+            {(["all", "escalated", "undisclosed"] as const).map(f => {
+              const labels = { all: "All", escalated: "⚠ Escalated only", undisclosed: "○ Not yet disclosed" };
+              const active = voiceStatusFilter === f;
+              return (
+                <button key={f} onClick={() => setVoiceStatusFilter(f)} style={{
+                  padding: "7px 13px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  border: active ? "1px solid rgba(0,194,168,0.4)" : "1px solid rgba(255,255,255,0.08)",
+                  background: active ? "rgba(0,194,168,0.12)" : "rgba(255,255,255,0.03)",
+                  color: active ? "#00c2a8" : "#7a8fa8", transition: "all 0.15s",
+                }}>
+                  {labels[f]}
+                </button>
+              );
+            })}
           </div>
         )}
 
         {/* Voice Sessions Table */}
         {tab === "voice" && (() => {
-          const filtered = voiceOrgFilter.trim()
-            ? voiceSessions.filter(s => s.org_id.toLowerCase().includes(voiceOrgFilter.trim().toLowerCase()))
-            : voiceSessions;
+          const filtered = voiceSessions
+            .filter(s => !voiceOrgFilter.trim() || s.org_id.toLowerCase().includes(voiceOrgFilter.trim().toLowerCase()))
+            .filter(s => voiceStatusFilter === "escalated" ? s.escalated : voiceStatusFilter === "undisclosed" ? !s.disclosure_confirmed : true);
           return (
             <div style={{
               background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,194,168,0.1)",
@@ -698,7 +766,7 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                 display: "flex", alignItems: "center", justifyContent: "space-between",
               }}>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, color: "#e0e8f4" }}>
-                  <PhoneCall size={15} style={{ color: "#00c2a8" }} /> Voice Sessions
+                  <PhoneCall size={15} style={{ color: "#00c2a8" }} /> Session Expiry Monitor
                 </span>
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   {voiceEscalatedCount > 0 && (
@@ -719,7 +787,7 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                 <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>Loading…</div>
               ) : filtered.length === 0 ? (
                 <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>
-                  {voiceOrgFilter ? "No sessions match that org ID." : "No voice sessions recorded yet."}
+                  {voiceOrgFilter || voiceStatusFilter !== "all" ? "No sessions match the active filters." : "No voice sessions recorded yet."}
                 </div>
               ) : (
                 <div style={{ overflowX: "auto" }}>
@@ -730,58 +798,113 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                         <th style={tableHd}>Org</th>
                         <th style={tableHd}>Disclosure</th>
                         <th style={tableHd}>Escalated</th>
-                        <th style={tableHd}>Created</th>
+                        <th style={tableHd}>Age</th>
+                        <th style={tableHd}>Expires In</th>
+                        <th style={tableHd}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.map((s) => (
-                        <tr
-                          key={s.session_id}
-                          style={{
-                            transition: "background 0.1s",
-                            background: s.escalated ? "rgba(239,68,68,0.04)" : undefined,
-                            borderLeft: s.escalated ? "3px solid rgba(239,68,68,0.5)" : "3px solid transparent",
-                          }}
-                        >
-                          <td style={{ ...tableTd, ...mono, color: "#e0e8f4" }}>
-                            {s.session_id.slice(0, 8)}…{s.session_id.slice(-4)}
-                          </td>
-                          <td style={{ ...tableTd, ...mono, color: "#7a8fa8" }}>
-                            {s.org_id.slice(0, 8)}…
-                          </td>
-                          <td style={tableTd}>
-                            <span style={{
-                              display: "inline-flex", alignItems: "center", gap: 5,
-                              fontSize: 11, fontWeight: 700,
-                              color: s.disclosure_confirmed ? "#3fb950" : "#fbbd24",
-                            }}>
-                              <span style={{
-                                width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
-                                background: s.disclosure_confirmed ? "#3fb950" : "#fbbd24",
-                                boxShadow: `0 0 5px ${s.disclosure_confirmed ? "#3fb95080" : "#fbbd2480"}`,
-                              }} />
-                              {s.disclosure_confirmed ? "Confirmed" : "Pending"}
-                            </span>
-                          </td>
-                          <td style={tableTd}>
-                            {s.escalated ? (
+                      {filtered.map((s) => {
+                        const actionState = voiceActionLoading[s.session_id];
+                        const isExpiringSoon = s.hours_until_purge < 6;
+                        return (
+                          <tr
+                            key={s.session_id}
+                            style={{
+                              transition: "background 0.1s",
+                              background: s.escalated ? "rgba(239,68,68,0.04)" : undefined,
+                              borderLeft: s.escalated ? "3px solid rgba(239,68,68,0.5)" : "3px solid transparent",
+                            }}
+                          >
+                            <td style={{ ...tableTd, ...mono, color: "#e0e8f4" }}>
+                              {s.session_id.slice(0, 8)}…{s.session_id.slice(-4)}
+                            </td>
+                            <td style={{ ...tableTd, ...mono, color: "#7a8fa8", fontSize: 11 }}>
+                              {s.org_id.slice(0, 12)}…
+                            </td>
+                            <td style={tableTd}>
                               <span style={{
                                 display: "inline-flex", alignItems: "center", gap: 5,
-                                fontSize: 11, fontWeight: 800, color: "#f87171",
-                                background: "rgba(239,68,68,0.1)", borderRadius: 6,
-                                padding: "3px 8px", border: "1px solid rgba(239,68,68,0.3)",
+                                fontSize: 11, fontWeight: 700,
+                                color: s.disclosure_confirmed ? "#3fb950" : "#fbbd24",
                               }}>
-                                ⚠ Escalated
+                                <span style={{
+                                  width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                                  background: s.disclosure_confirmed ? "#3fb950" : "#fbbd24",
+                                  boxShadow: `0 0 5px ${s.disclosure_confirmed ? "#3fb95080" : "#fbbd2480"}`,
+                                }} />
+                                {s.disclosure_confirmed ? "Confirmed" : "Pending"}
                               </span>
-                            ) : (
-                              <span style={{ fontSize: 11, color: "#7a8fa8" }}>—</span>
-                            )}
-                          </td>
-                          <td style={{ ...tableTd, color: "#7a8fa8", fontSize: 11, whiteSpace: "nowrap" }}>
-                            {fmt(s.created_at)}
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td style={tableTd}>
+                              {s.escalated ? (
+                                <span style={{
+                                  display: "inline-flex", alignItems: "center", gap: 5,
+                                  fontSize: 11, fontWeight: 800, color: "#f87171",
+                                  background: "rgba(239,68,68,0.1)", borderRadius: 6,
+                                  padding: "3px 8px", border: "1px solid rgba(239,68,68,0.3)",
+                                }}>
+                                  ⚠ Escalated
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: 11, color: "#7a8fa8" }}>—</span>
+                              )}
+                            </td>
+                            <td style={{ ...tableTd, color: "#7a8fa8", fontSize: 11, whiteSpace: "nowrap" }}>
+                              {fmtHours(s.age_hours)} ago
+                            </td>
+                            <td style={{ ...tableTd, whiteSpace: "nowrap" }}>
+                              <span style={{
+                                fontSize: 11, fontWeight: 700,
+                                color: expiryColor(s.hours_until_purge),
+                                display: "inline-flex", alignItems: "center", gap: 4,
+                              }}>
+                                {isExpiringSoon && <span>⏳</span>}
+                                {fmtHours(s.hours_until_purge)}
+                              </span>
+                            </td>
+                            <td style={{ ...tableTd, whiteSpace: "nowrap" }}>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button
+                                  disabled={!!actionState}
+                                  onClick={() => handleExtend(s.session_id)}
+                                  title="Reset TTL to 24h from now"
+                                  style={{
+                                    padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+                                    border: "1px solid rgba(0,194,168,0.3)",
+                                    background: actionState === "extend" ? "rgba(0,194,168,0.2)" : "rgba(0,194,168,0.08)",
+                                    color: "#00c2a8", cursor: actionState ? "default" : "pointer",
+                                    opacity: actionState && actionState !== "extend" ? 0.4 : 1,
+                                    transition: "all 0.15s",
+                                  }}
+                                >
+                                  {actionState === "extend" ? "…" : "Extend"}
+                                </button>
+                                <button
+                                  disabled={actionState === "delete"}
+                                  onClick={() => handleForceDelete(s.session_id)}
+                                  title={actionState === "confirm-delete" ? "Click again to confirm deletion" : "Force-delete this session"}
+                                  style={{
+                                    padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+                                    border: actionState === "confirm-delete"
+                                      ? "1px solid rgba(239,68,68,0.6)"
+                                      : "1px solid rgba(239,68,68,0.2)",
+                                    background: actionState === "confirm-delete"
+                                      ? "rgba(239,68,68,0.2)"
+                                      : "rgba(239,68,68,0.06)",
+                                    color: "#f87171",
+                                    cursor: actionState === "delete" ? "default" : "pointer",
+                                    opacity: actionState === "delete" ? 0.5 : 1,
+                                    transition: "all 0.15s",
+                                  }}
+                                >
+                                  {actionState === "delete" ? "…" : actionState === "confirm-delete" ? "Confirm?" : "Delete"}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
