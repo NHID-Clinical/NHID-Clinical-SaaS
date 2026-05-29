@@ -16,6 +16,7 @@ import Billing from "@/pages/billing";
 import AdminPage from "@/pages/admin";
 import AuditPage from "@/pages/audit";
 import TryPage from "@/pages/try";
+import DocsSDKPage from "@/pages/docs-sdk";
 import { useApiKey } from "@/hooks/use-nhid";
 import { ApiError } from "@/lib/api";
 
@@ -205,9 +206,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 function Router() {
   return (
     <Switch>
-      {/* Public demo — no auth required */}
+      {/* Public pages — no auth required */}
       <Route path="/try" component={TryPage} />
       <Route path="/demo" component={TryPage} />
+      <Route path="/docs/sdk" component={DocsSDKPage} />
 
       {/* Admin portal — standalone, no shared layout, no auth gate */}
       <Route path="/admin" component={AdminPage} />
