@@ -16,8 +16,30 @@ import Billing from "@/pages/billing";
 import AdminPage from "@/pages/admin";
 import AuditPage from "@/pages/audit";
 import { useApiKey } from "@/hooks/use-nhid";
+import { ApiError } from "@/lib/api";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return false;
+        return failureCount < 1;
+      },
+      staleTime: 30_000,
+    },
+  },
+});
+
+queryClient.getQueryCache().subscribe((event) => {
+  if (event.type === "updated" && (event.action as any)?.type === "error") {
+    const error = (event.action as any).error;
+    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+      localStorage.removeItem("nhid_api_key");
+      localStorage.removeItem("nhid_org");
+      window.dispatchEvent(new Event("storage"));
+    }
+  }
+});
 
 function ProtectedRoute({ component: Component, ...rest }: any) {
   const apiKey = useApiKey();

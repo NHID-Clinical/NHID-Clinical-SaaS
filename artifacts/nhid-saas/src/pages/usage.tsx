@@ -53,8 +53,36 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
+function ErrorState({ message }: { message: string }) {
+  return (
+    <div
+      style={{
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        minHeight: 320, gap: 12,
+        border: "1px dashed var(--nhid-border)", borderRadius: 14, padding: 40,
+      }}
+    >
+      <Activity size={32} style={{ color: "var(--nhid-muted)", opacity: 0.3 }} />
+      <p style={{ fontSize: 14, color: "var(--nhid-muted)", fontWeight: 600 }}>Unable to load usage data</p>
+      <p style={{ fontSize: 12, color: "var(--nhid-muted)", opacity: 0.7, textAlign: "center", maxWidth: 320 }}>
+        {message}
+      </p>
+      <button
+        onClick={() => window.location.reload()}
+        style={{
+          marginTop: 8, padding: "8px 20px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+          background: "rgba(0,194,168,0.12)", border: "1px solid rgba(0,194,168,0.25)",
+          color: "var(--nhid-teal)", cursor: "pointer", fontFamily: "'Raleway', sans-serif",
+        }}
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 export default function Usage() {
-  const { data: usage, isLoading } = useGetUsage();
+  const { data: usage, isLoading, isError, error } = useGetUsage();
 
   if (isLoading) {
     return (
@@ -69,6 +97,11 @@ export default function Usage() {
         <Skeleton style={{ height: 360, borderRadius: 14 }} />
       </div>
     );
+  }
+
+  if (isError) {
+    const msg = error instanceof Error ? error.message : "An unexpected error occurred.";
+    return <ErrorState message={msg} />;
   }
 
   if (!usage) return null;
