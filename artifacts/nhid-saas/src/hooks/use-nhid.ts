@@ -90,3 +90,14 @@ export function useProof(sessionId: string) {
     retry: false,
   });
 }
+
+export function useAuditProof(sessionId: string | null) {
+  const apiKey = useApiKey();
+  return useQuery({
+    queryKey: ["auditProof", sessionId],
+    queryFn: () => api.auditProof(apiKey!, sessionId!),
+    enabled: !!apiKey && !!sessionId,
+    retry: false,
+    staleTime: 30_000,
+  });
+}

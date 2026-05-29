@@ -29,9 +29,9 @@ const NHIDLogoMark = ({ size = 32 }: { size?: number }) => (
 
 const NAV_ITEMS = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, desc: "Overview & metrics" },
-  { name: "Audit Trail", href: "/trace", icon: Shield, desc: "Log an event" },
-  { name: "Verification", href: "/proof", icon: Search, desc: "Verify a session" },
-  { name: "Audit", href: "/audit", icon: ShieldCheck, desc: "Chain & HMAC verify" },
+  { name: "Audit Trail", href: "/audit", icon: ShieldCheck, desc: "Explore & verify sessions" },
+  { name: "Submit Event", href: "/trace", icon: Shield, desc: "Ingest a new audit event" },
+  { name: "Proof Lookup", href: "/proof", icon: Search, desc: "Lightweight session proof" },
   { name: "Usage", href: "/usage", icon: BarChart2, desc: "API usage stats" },
   { name: "Billing", href: "/billing", icon: CreditCard, desc: "Plans & upgrade" },
 ];

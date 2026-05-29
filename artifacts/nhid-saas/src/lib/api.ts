@@ -79,6 +79,51 @@ export interface ProofResult {
   trace: Record<string, unknown>;
 }
 
+export interface AuditEvent {
+  event_id: string;
+  seq_num: number;
+  session_id: string;
+  event_type: string | null;
+  state_before: string | null;
+  state_after: string | null;
+  input_text: string | null;
+  policy_action: string | null;
+  reason_code: string | null;
+  response_text: string | null;
+  policy_version: string | null;
+  model_version: string | null;
+  timestamp: string;
+  event_hash: string;
+  hmac_signature: string;
+  hash_ok: boolean;
+  hmac_ok: boolean;
+}
+
+export interface AuditBreak {
+  seq_num: number;
+  event_id: string;
+  reason: string;
+}
+
+export interface AuditProofResult {
+  session_id: string;
+  org_id: string;
+  chain_valid: boolean;
+  hmac_valid: boolean;
+  event_count: number;
+  breaks: AuditBreak[];
+  events: AuditEvent[];
+}
+
+export interface AuditVerifyResult {
+  session_id: string;
+  org_id: string;
+  chain_valid: boolean;
+  hmac_valid: boolean;
+  event_count: number;
+  breaks: AuditBreak[];
+}
+
 export interface CreateOrgResult {
   org_id: string;
   org_name: string;
@@ -179,6 +224,14 @@ export const api = {
   /** Retrieve the proof/audit trail for a session. */
   proof: (apiKey: string, sessionId: string) =>
     req<ProofResult>(`/saas/proof/${sessionId}`, {}, apiKey),
+
+  /** Full audit proof with per-event HMAC + chain verification. */
+  auditProof: (apiKey: string, sessionId: string) =>
+    req<AuditProofResult>(`/saas/audit/proof/${sessionId}`, {}, apiKey),
+
+  /** Cryptographic chain + HMAC verification (no event payloads). */
+  auditVerify: (apiKey: string, sessionId: string) =>
+    req<AuditVerifyResult>(`/saas/audit/verify/${sessionId}`, {}, apiKey),
 
   /** Replay events for a session. */
   replay: (apiKey: string, sessionId: string) =>
