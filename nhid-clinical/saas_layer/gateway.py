@@ -554,39 +554,64 @@ async def billing_publishable_key():
 # Vendors embed this SVG in their documentation to signal NHID compliance.
 # Only active paid-tier orgs (L1/L2/L3) receive a badge; free/inactive return 404.
 
-_TIER_LABEL: dict = {"l1": "L1 Verified", "l2": "L2 Verified", "l3": "L3 Verified"}
-_TIER_COLOR: dict = {"l1": "#00c2a8", "l2": "#53d8fb", "l3": "#a78bfa"}
+_TIER_ACCENT: dict = {"l1": "#00c2a8", "l2": "#38bdf8", "l3": "#c084fc"}
+_TIER_LOGO_FG: dict = {"l1": "#042f2e", "l2": "#082f49", "l3": "#2e1065"}
+_TIER_LEVEL: dict = {"l1": "L1", "l2": "L2", "l3": "L3"}
 
 
-def _build_badge_svg(org_name: str, tier: str) -> str:
-    tier_label = _TIER_LABEL.get(tier, tier.upper())
-    accent = _TIER_COLOR.get(tier, "#00c2a8")
-    safe_name = org_name[:28] + ("…" if len(org_name) > 28 else "")
-    # Approximate character width for dynamic SVG width
-    left_w = max(80, len(safe_name) * 6 + 24)
-    right_w = 88
+def _build_badge_svg(org_name: str, tier: str, org_id: str = "") -> str:
+    accent = _TIER_ACCENT.get(tier, "#00c2a8")
+    logo_fg = _TIER_LOGO_FG.get(tier, "#042f2e")
+    tier_level = _TIER_LEVEL.get(tier, tier.upper())
+    safe_name = (org_name[:26] + "…") if len(org_name) > 26 else org_name
+
+    # Unique IDs prevent conflicts when multiple badges appear on one page
+    uid = (org_id or tier or "nhid")[:8].replace("-", "")
+
+    # Layout constants
+    left_w = 74    # NHID branding section (bar + logo + label)
+    # Right section width: wide enough for "✓ L2 VERIFIED" + org name
+    right_w = max(114, len(safe_name) * 5 + 32)
     total_w = left_w + right_w
-    mid_x = left_w + right_w // 2
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="20">
-  <linearGradient id="s" x2="0" y2="100%">
-    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
-    <stop offset="1" stop-opacity=".1"/>
-  </linearGradient>
-  <clipPath id="r">
-    <rect width="{total_w}" height="20" rx="3"/>
-  </clipPath>
-  <g clip-path="url(#r)">
-    <rect width="{left_w}" height="20" fill="#1e293b"/>
-    <rect x="{left_w}" width="{right_w}" height="20" fill="{accent}"/>
-    <rect width="{total_w}" height="20" fill="url(#s)"/>
-  </g>
-  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11">
-    <text x="{left_w // 2}" y="15" fill="#000" fill-opacity=".3">{safe_name}</text>
-    <text x="{left_w // 2}" y="14">{safe_name}</text>
-    <text x="{mid_x}" y="15" fill="#000" fill-opacity=".3">NHID {tier_label}</text>
-    <text x="{mid_x}" y="14">NHID {tier_label}</text>
-  </g>
-</svg>"""
+    tx = left_w + 10   # x-start for right-section text
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="30"'
+        f' role="img" aria-label="NHID Clinical {tier_level} Verified — {safe_name}">'
+        f"<title>NHID Clinical {tier_level} Verified — {safe_name}</title>"
+        "<defs>"
+        f'<linearGradient id="bg{uid}" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0" stop-color="#1e293b"/>'
+        f'<stop offset="1" stop-color="#0f172a"/>'
+        "</linearGradient>"
+        f'<clipPath id="cp{uid}"><rect width="{total_w}" height="30" rx="5"/></clipPath>'
+        "</defs>"
+        # Card background + tinted right section + border
+        f'<g clip-path="url(#cp{uid})">'
+        f'<rect width="{total_w}" height="30" fill="url(#bg{uid})"/>'
+        f'<rect width="3" height="30" fill="{accent}"/>'
+        f'<rect x="{left_w}" width="{right_w}" height="30" fill="{accent}" fill-opacity="0.10"/>'
+        f'<rect width="{total_w}" height="30" rx="5" fill="none" stroke="{accent}" stroke-width="0.8" stroke-opacity="0.30"/>'
+        "</g>"
+        # N logo mark
+        f'<rect x="9" y="7" width="16" height="16" rx="3" fill="{accent}"/>'
+        f'<text x="17" y="18.5" text-anchor="middle"'
+        f' font-family="\'Arial Black\',Arial,sans-serif" font-size="10" font-weight="900" fill="{logo_fg}">N</text>'
+        # NHID / Clinical label (two lines)
+        f'<text x="30" y="13" font-family="Arial,Helvetica,sans-serif" font-size="7.5"'
+        f' font-weight="700" fill="{accent}" letter-spacing="0.8">NHID</text>'
+        f'<text x="30" y="24" font-family="Arial,Helvetica,sans-serif" font-size="7"'
+        f' fill="#475569" letter-spacing="0.3">Clinical</text>'
+        # Divider
+        f'<line x1="{left_w}" y1="6" x2="{left_w}" y2="24" stroke="{accent}" stroke-width="0.5" stroke-opacity="0.35"/>'
+        # ✓ TIER VERIFIED (top line)
+        f'<text x="{tx}" y="14" font-family="Arial,Helvetica,sans-serif" font-size="8.5"'
+        f' font-weight="700" fill="{accent}">&#x2713; {tier_level} VERIFIED</text>'
+        # Org name (bottom line)
+        f'<text x="{tx}" y="25" font-family="Arial,Helvetica,sans-serif" font-size="7.5"'
+        f' fill="#94a3b8">{safe_name}</text>'
+        "</svg>"
+    )
 
 
 @app.get("/saas/badge/{org_id}", tags=["Badge"])
@@ -613,7 +638,7 @@ async def compliance_badge(org_id: str):
             detail="Badge not available for this org (free tier or inactive subscription).",
         )
 
-    svg = _build_badge_svg(org["org_name"], plan)
+    svg = _build_badge_svg(org["org_name"], plan, org_id)
     return Response(
         content=svg,
         media_type="image/svg+xml",
