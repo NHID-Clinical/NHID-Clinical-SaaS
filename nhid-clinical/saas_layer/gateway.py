@@ -550,6 +550,81 @@ async def billing_publishable_key():
     return {"publishable_key": key}
 
 
+# ── Compliance badge (public, no auth) ────────────────────────────────────────
+# Vendors embed this SVG in their documentation to signal NHID compliance.
+# Only active paid-tier orgs (L1/L2/L3) receive a badge; free/inactive return 404.
+
+_TIER_LABEL: dict = {"l1": "L1 Verified", "l2": "L2 Verified", "l3": "L3 Verified"}
+_TIER_COLOR: dict = {"l1": "#00c2a8", "l2": "#53d8fb", "l3": "#a78bfa"}
+
+
+def _build_badge_svg(org_name: str, tier: str) -> str:
+    tier_label = _TIER_LABEL.get(tier, tier.upper())
+    accent = _TIER_COLOR.get(tier, "#00c2a8")
+    safe_name = org_name[:28] + ("…" if len(org_name) > 28 else "")
+    # Approximate character width for dynamic SVG width
+    left_w = max(80, len(safe_name) * 6 + 24)
+    right_w = 88
+    total_w = left_w + right_w
+    mid_x = left_w + right_w // 2
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="20">
+  <linearGradient id="s" x2="0" y2="100%">
+    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+    <stop offset="1" stop-opacity=".1"/>
+  </linearGradient>
+  <clipPath id="r">
+    <rect width="{total_w}" height="20" rx="3"/>
+  </clipPath>
+  <g clip-path="url(#r)">
+    <rect width="{left_w}" height="20" fill="#1e293b"/>
+    <rect x="{left_w}" width="{right_w}" height="20" fill="{accent}"/>
+    <rect width="{total_w}" height="20" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11">
+    <text x="{left_w // 2}" y="15" fill="#000" fill-opacity=".3">{safe_name}</text>
+    <text x="{left_w // 2}" y="14">{safe_name}</text>
+    <text x="{mid_x}" y="15" fill="#000" fill-opacity=".3">NHID {tier_label}</text>
+    <text x="{mid_x}" y="14">NHID {tier_label}</text>
+  </g>
+</svg>"""
+
+
+@app.get("/saas/badge/{org_id}", tags=["Badge"])
+async def compliance_badge(org_id: str):
+    """
+    Return an SVG compliance badge for a paid-tier org.
+
+    Publicly accessible — no API key required. Vendors embed the URL:
+      <img src="https://<host>/saas/badge/<org_id>" alt="NHID Verified"/>
+
+    Returns 404 for free-tier or inactive orgs so badge URLs go dark
+    when a subscription lapses.
+    """
+    org = get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Org not found.")
+
+    plan = org.get("plan", "free")
+    status = org.get("status", "active")
+
+    if plan not in _TIER_LABEL or status != "active":
+        raise HTTPException(
+            status_code=404,
+            detail="Badge not available for this org (free tier or inactive subscription).",
+        )
+
+    svg = _build_badge_svg(org["org_name"], plan)
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={
+            "Cache-Control": "no-cache, max-age=0",
+            "X-NHID-Plan": plan,
+            "X-NHID-Org": org_id,
+        },
+    )
+
+
 # ── Trace: append events (subscription-gated) ─────────────────────────────────
 
 class TraceEventRequest(BaseModel):
