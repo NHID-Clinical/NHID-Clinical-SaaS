@@ -133,6 +133,55 @@ const PRESETS = [
       response_text: null,
     },
   },
+  // ── NHID Conformance Scenarios ─────────────────────────────────────────────
+  {
+    id: "idg01_violation",
+    label: "IDG-01 Violation",
+    color: "#ef4444",
+    desc: "AI requests PHI without first disclosing non-human identity",
+    badge: "nhid",
+    payload: {
+      event_type: "policy_evaluation",
+      state_before: "disclosure_pending",
+      state_after: "blocked",
+      input_text: "Can I get the member ID and date of birth for patient Johnson?",
+      policy_action: "deny",
+      reason_code: "IDG01_NO_DISCLOSURE",
+      response_text: "Identity disclosure required before any data exchange.",
+    },
+  },
+  {
+    id: "pdx01_violation",
+    label: "PDX-01 Violation",
+    color: "#f97316",
+    desc: "PHI fields accessed before AI identity disclosure was confirmed",
+    badge: "nhid",
+    payload: {
+      event_type: "policy_evaluation",
+      state_before: "phi_requested",
+      state_after: "blocked",
+      input_text: "What is the member's diagnosis code and authorization status?",
+      policy_action: "deny",
+      reason_code: "PDX01_PHI_BEFORE_DISCLOSURE",
+      response_text: "Data exchange blocked: AI identity not confirmed.",
+    },
+  },
+  {
+    id: "compliant_call",
+    label: "Compliant Call",
+    color: "#22c55e",
+    desc: "AI discloses identity at turn 0 — CAS reaches Verified Trust tier",
+    badge: "nhid",
+    payload: {
+      event_type: "policy_evaluation",
+      state_before: "disclosure_pending",
+      state_after: "disclosure_confirmed",
+      input_text: "Hello, I am an automated system calling on behalf of Acme Health AI. How can I assist you?",
+      policy_action: "allow",
+      reason_code: "IDG01_DISCLOSURE_CONFIRMED",
+      response_text: "Identity confirmed. Proceeding with authorized data exchange. CAS: 0.94 — Verified Trust L2.",
+    },
+  },
 ] as const;
 
 type PresetId = typeof PRESETS[number]["id"];

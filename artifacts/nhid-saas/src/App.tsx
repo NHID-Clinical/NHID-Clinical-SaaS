@@ -17,6 +17,8 @@ import AdminPage from "@/pages/admin";
 import AuditPage from "@/pages/audit";
 import TryPage from "@/pages/try";
 import DocsSDKPage from "@/pages/docs-sdk";
+import PricingPage from "@/pages/pricing";
+import SettingsPage from "@/pages/settings";
 import { useApiKey } from "@/hooks/use-nhid";
 import { ApiError } from "@/lib/api";
 
@@ -135,27 +137,48 @@ function LoginScreen() {
         Secure single sign-on
       </p>
 
-      <a
-        href="try"
-        style={{
-          marginTop: "0.75rem",
-          display: "inline-flex", alignItems: "center", gap: 6,
-          padding: "0.55rem 1.2rem",
-          borderRadius: 8,
-          background: "rgba(0,194,168,0.08)",
-          border: "1px solid rgba(0,194,168,0.22)",
-          color: "#00c2a8",
-          fontSize: "0.8rem",
-          fontWeight: 700,
-          textDecoration: "none",
-          letterSpacing: "0.01em",
-          transition: "opacity 0.15s",
-        }}
-        onMouseOver={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "0.8")}
-        onMouseOut={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "1")}
-      >
-        ⚡ Try without an account
-      </a>
+      <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "center" }}>
+        <a
+          href="try"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "0.55rem 1.2rem",
+            borderRadius: 8,
+            background: "rgba(0,194,168,0.08)",
+            border: "1px solid rgba(0,194,168,0.22)",
+            color: "#00c2a8",
+            fontSize: "0.8rem",
+            fontWeight: 700,
+            textDecoration: "none",
+            letterSpacing: "0.01em",
+            transition: "opacity 0.15s",
+          }}
+          onMouseOver={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "0.8")}
+          onMouseOut={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "1")}
+        >
+          ⚡ Try without an account
+        </a>
+        <a
+          href="pricing"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "0.55rem 1.2rem",
+            borderRadius: 8,
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            color: "#64748b",
+            fontSize: "0.8rem",
+            fontWeight: 600,
+            textDecoration: "none",
+            letterSpacing: "0.01em",
+            transition: "opacity 0.15s",
+          }}
+          onMouseOver={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "0.8")}
+          onMouseOut={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "1")}
+        >
+          Pricing
+        </a>
+      </div>
     </div>
   );
 }
@@ -209,6 +232,7 @@ function Router() {
       {/* Public pages — no auth required */}
       <Route path="/try" component={TryPage} />
       <Route path="/demo" component={TryPage} />
+      <Route path="/pricing" component={PricingPage} />
       <Route path="/docs/sdk" component={DocsSDKPage} />
 
       {/* Admin portal — standalone, no shared layout, no auth gate */}
@@ -227,6 +251,7 @@ function Router() {
               <Route path="/proof"><ProtectedRoute component={Proof} /></Route>
               <Route path="/audit"><ProtectedRoute component={AuditPage} /></Route>
               <Route path="/billing"><ProtectedRoute component={Billing} /></Route>
+              <Route path="/settings"><ProtectedRoute component={SettingsPage} /></Route>
               <Route component={NotFound} />
             </Switch>
           </Layout>
