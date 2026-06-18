@@ -5,7 +5,6 @@ import {
   X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard, ShieldCheck, Zap, Settings2,
 } from "lucide-react";
 import { useApiKey } from "@/hooks/use-nhid";
-import { useAuth } from "@workspace/replit-auth-web";
 
 const NHIDLogoMark = ({ size = 32 }: { size?: number }) => (
   <div
@@ -115,7 +114,6 @@ function SidebarContent({
 }) {
   const health = useHealthStatus();
   const orgName = useOrgName();
-  const { logout } = useAuth();
 
   const STATUS_ITEMS = [
     { label: "NHID Core", status: health.nhid },
@@ -307,7 +305,7 @@ function SidebarContent({
 
           {/* Sign out */}
           <button
-            onClick={() => { clearOrgSession(); onClose?.(); logout(); }}
+            onClick={() => { clearOrgSession(); onClose?.(); }}
             data-testid="btn-signout"
             style={{
               width: "100%", display: "flex", alignItems: "center", gap: 10,
@@ -384,7 +382,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const apiKey = useApiKey();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { logout } = useAuth();
 
   if (!apiKey) return <>{children}</>;
 
@@ -485,7 +482,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
             {/* Sign out on mobile top bar */}
             <button
-              onClick={() => { clearOrgSession(); logout(); }}
+              onClick={() => { clearOrgSession(); }}
               title="Sign out"
               className="md:hidden"
               style={{

@@ -1,0 +1,14 @@
+{
+  "buildCommand": "PORT=3000 BASE_PATH=/ pnpm build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/saas-api/:path*",
+      "destination": "https://REPLACE_WITH_RAILWAY_BACKEND_DOMAIN/saas-api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
