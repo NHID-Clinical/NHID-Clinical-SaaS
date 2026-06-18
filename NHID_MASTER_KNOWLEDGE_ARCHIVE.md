@@ -1,7 +1,7 @@
 # NHID-CLINICAL MASTER KNOWLEDGE ARCHIVE
 
-**Version:** 1.0  
-**Compiled:** 2026-06-12  
+**Version:** 1.2  
+**Compiled:** 2026-06-18 (originally 2026-06-12)  
 **Source:** NHID-Clinical-SaaS repository (private) + nhid-clinical/ open proposal (CC BY 4.0)  
 **Author of underlying work:** Brianna Baynard · contact@nhid-clinical.org  
 **NIST Comment Reference:** NIST-2025-0035-0026  
@@ -10,7 +10,7 @@
 
 ---
 
-> **Archive Status:** This document is the consolidated master knowledge base derived from 100% of source material in the NHID-Clinical-SaaS repository as of 2026-06-12. All claims are traceable to source files. Inferred content is labeled `[Inferred]`. Missing or incomplete content is labeled `[Missing]` or `[Open Question]`.
+> **Archive Status:** This document is the consolidated master knowledge base derived from 100% of source material in the NHID-Clinical-SaaS repository, originally compiled 2026-06-12 and reconciled against external NHID-Clinical v1.3 reference PDFs on 2026-06-18 (see §23.13). All claims are traceable to source files. Inferred content is labeled `[Inferred]`. Missing or incomplete content is labeled `[Missing]` or `[Open Question]`.
 
 ---
 
@@ -470,9 +470,11 @@ The Postgres `enforce_audit_append_only()` trigger blocks any UPDATE or DELETE o
 
 ---
 
-### 4.3 Cryptographic Agent Identity (NHID-Auth Layer)
+### 4.3 Cryptographic Agent Identity (NHID-Auth v2)
 
-Implemented in `nhid-clinical/src/agent_identity.py` as a v1.4 preview:
+Implemented in `nhid-clinical/src/agent_identity.py`. Provider-signed agent credentials
+with NPI binding, scoped delegation chains, per-agent/per-delegation revocation, and
+call-SID nonce binding. Algorithm: Ed25519 (32-byte keys, 64-byte signatures).
 
 **Ed25519 Key System:**
 - Each agent has an Ed25519 keypair (provider-issued)
@@ -483,37 +485,86 @@ Implemented in `nhid-clinical/src/agent_identity.py` as a v1.4 preview:
 ```
 Provider (NPI holder)
     │
-    │── signs Delegation(agent_id, public_key, scope, expires_at)
+    │── signs Delegation(agent_id, public_key, scope, expires_at, call_sid, nonce)
     ▼
 AgentPassport(delegation, provider_signature, agent_signature)
 ```
 
 **Delegation Fields:**
-- `provider_npi` — NPI of authorizing provider
+- `provider_npi` — 10-digit NPI of authorizing provider, validated against `^\d{10}$` (raises `ValueError` at creation if invalid)
 - `agent_id` — stable agent identifier
 - `agent_public_key_b64` — base64 Ed25519 public key
 - `scope` — list of permitted operations
-- `expires_at` — Unix timestamp TTL
-- `delegation_id` — `del_{agent_id}_{timestamp}`
+- `expires_at` / `created_at` — ISO 8601 UTC timestamps
+- `delegation_id` — UUID v4
+- `call_sid` — binds this credential to a specific call
+- `nonce` — additional replay prevention (UUID4 hex, generated per delegation)
 
-**Verification (`verify_passport`):**
-1. Check revocation list
-2. Check expiry
-3. Verify provider signature over delegation JSON
-4. Verify agent's own signature over delegation JSON
-5. Return `VerificationResult(valid, reason, delegation_id, provider_npi, agent_id, scope)`
+**Verification (`verify_passport(passport, provider_pub, call_sid=None, required_scope=None)`):**
+1. Check revocation (per-agent and per-delegation lists) → `ERR_REVOKED`
+2. Check NPI format → `ERR_INVALID_NPI`
+3. Check expiry → `ERR_EXPIRED`
+4. Verify provider signature, then agent's own signature over delegation JSON → `ERR_INVALID_SIG`
+5. Check call-SID match if provided → `ERR_NONCE_MISMATCH`
+6. Check required scope is a subset of the delegation's scope → `ERR_SCOPE_VIOLATION`
+7. Return `VerificationResult(valid, reason, delegation_id, provider_npi, agent_id, scope)`
+
+**Delegation Chains (`validate_chain(passports, provider_pub)`):**
+- Maximum 3 hops (Provider → Vendor → Sub-vendor → Agent); longer chains return `ERR_CHAIN_TOO_LONG`
+- Monotonic scope narrowing — each hop's scope must be a subset of the previous hop's scope, or `ERR_CHAIN_NARROWING`
+- Each hop independently verified (signature, expiry, revocation, call-SID) before the chain is accepted
 
 **Revocation:**
-- `revoke_agent(agent_id)` adds to in-memory `revocation_list` with timestamp
-- [Open Question: persistent revocation storage not yet implemented]
+- `revoke_agent(agent_id)` — revokes all credentials for an agent (in-memory `_revoked_agents` dict)
+- `revoke_delegation(delegation_id)` — revokes a single delegation (in-memory `_revoked_delegations` dict)
+- Revocation is permanent in the reference implementation; production deployment requires a persistent revocation store
 
-**Source:** `nhid-clinical/src/agent_identity.py`
+**Error Codes:** `ERR_EXPIRED`, `ERR_REVOKED`, `ERR_INVALID_SIG`, `ERR_NONCE_MISMATCH`, `ERR_SCOPE_VIOLATION`, `ERR_INVALID_NPI`, `ERR_CHAIN_NARROWING`, `ERR_CHAIN_TOO_LONG`
+
+**Source:** `nhid-clinical/src/agent_identity.py`, tests in `nhid-clinical/tests/test_identity.py` (21 tests)
 
 ---
 
-### 4.4 Trust Scoring
+### 4.4 Trust Scoring — Call Authorization Score (CAS)
 
-[Missing: No formal trust scoring system is implemented in v1.3. The certification tier (L1/L2/L3) functions as a coarse trust signal. A live registry for real-time trust lookup is planned for v1.4+.]
+Implemented in `nhid-clinical/src/nhid_cas.py`. CAS is a continuous compliance signal
+in `[0.0, 1.0]` computed per call session.
+
+**Formula:** `CAS = F_IAF × F_NOCF × ECF`
+
+| Factor | Definition | Range |
+|--------|-----------|-------|
+| `F_IAF` | Identity Assurance Factor: `1.0` unless an `IDG-01` or `PDX-01` critical violation occurred, else `0.0` | `{0.0, 1.0}` |
+| `F_NOCF` | Operational Conformance Factor — derived from call-quality and risk telemetry | `[0.0, 1.0]` |
+| `ECF` | Evidence Completeness Factor — fraction of required `ATR-01` audit fields present on the event | `[0.0, 1.0]` |
+
+**NOCF sub-formula** (`compute_nocf` in `nhid_cas.py`):
+```
+C (coherence) = (entity_match_rate + intent_accuracy + domain_hit_rate) / 3
+E (execution)  = successful_actions / attempted_actions
+S (stability)  = 1 − (call_drop_rate + audio_corruption_rate + tool_failure_rate) / 3
+L_hat          = max(0, 1 − latency_ms / l_max_ms)
+R (risk)       = w_H × hallucination_risk + w_P × pii_leakage_risk + w_I × identity_ambiguity_risk
+NOCF           = C × E × S × L_hat × (1 − R)
+```
+Weights: `w_H = 0.40`, `w_P = 0.35`, `w_I = 0.25` (apply only to the risk term `R`).
+`l_max_ms` default `2500`, floor `1500`, ceiling `5000`.
+
+**CAS Tier Ladder** (`tier_for_cas`):
+
+| CAS Score | Tier | Badge |
+|-----------|------|-------|
+| ≥ 0.90 | Verified Trust | L2 |
+| ≥ 0.75 | Conditional Trust | L1 |
+| ≥ 0.50 | Review Required | (none) |
+| ≥ 0.20 | Denied / Degraded | (none) |
+| < 0.20 | Hard Denial | (none) |
+
+CAS is multiplicative, not additive — any single zeroed factor (an identity gate
+violation, zero successful actions, or zero audit-field completeness) zeroes the
+entire score regardless of the other two factors.
+
+**Source:** `nhid-clinical/src/nhid_cas.py`, tests in `nhid-clinical/tests/test_nhid_cas.py` (27 tests)
 
 ---
 
@@ -1053,7 +1104,7 @@ Canonical Event Schema (`schema/nhid_trace_schema_v1.json`, JSON Schema Draft 20
 - Voice webhook normalization (Retell, Vapi, Twilio)
 - Compliance badge system (SVG, per-org)
 - React SaaS frontend (dark glassmorphism design)
-- Ed25519 agent identity system (v1.4 preview)
+- Ed25519 agent identity system (NHID-Auth v2: delegation chains, revocation, CAS scoring)
 - Twilio adapter
 
 **Remaining for Production Launch (from finalization document):**
@@ -2510,9 +2561,56 @@ Rule: never re-introduce sqlite3 in any saas_layer module.
 
 ---
 
-*End of NHID-Clinical Master Knowledge Archive v1.0*
+### 23.13 Changelog Entry — v1.2 Reconciliation (2026-06-18)
 
-*Document compiled 2026-06-12 from 358 source files across NHID-Clinical-SaaS repository.*
+Four external NHID-Clinical v1.3 reference PDFs were supplied for cross-checking
+(`NHID-Clinical-v1.3-Overview.pdf`, `NHID-Clinical-v1.3-Core-Specification.pdf`,
+`NHID-Clinical-Operational-Blueprint-v1.3.pdf`, and a `MASTER-KNOWLEDGE-ARCHIVE.pdf`
+labeled "v1.2" internally, itself closing with a "v1.1" line — an inconsistency in
+that external document, noted here rather than silently resolved). Reconciling them
+against this archive and the actual repository code found:
+
+- **Header was stale.** This file's header said `Version: 1.0 / Compiled: 2026-06-12`,
+  but its own body already contained `PDX-01`/`EIT-01` correctly named and the
+  §2.4.1 formal IL/E_PHI measurement definitions — content that postdated the
+  stated compile date. Header corrected to `1.2 / 2026-06-18 (originally 2026-06-12)`.
+- **NHID-Auth and CAS were aspirational in the external PDFs, not yet real.** The four
+  PDFs describe NHID-Auth v2 as "Released June 2026 / Reference implementation live"
+  with delegation chains, call-SID nonce binding, NPI format validation, structured
+  error codes, and a fully scored CAS/NOCF system. The actual code at the time
+  (`nhid-clinical/src/agent_identity.py`) was a 72-line, 4-test, self-labeled "v1.4"
+  preview with no chain logic, no nonce/call_sid fields, `provider_npi` hardcoded to
+  the literal string `"TODO"`, and zero CAS/NOCF code anywhere in the repository —
+  confirmed by direct inspection, not by the PDFs' own (inflated) test-count claims,
+  which also disagreed with each other (42 vs. 26 tests for the same file).
+  Per direction, the gap was closed by **building the real implementation** rather
+  than walking back the documentation:
+  - `agent_identity.py` rewritten to the v2 spec: 10-digit-NPI validation, UUID v4
+    `delegation_id`, `call_sid`/`nonce` fields, `revoke_delegation`, `validate_chain`
+    (max 3 hops, monotonic scope narrowing), and the 8 `ERR_*` codes
+    (`ERR_EXPIRED`, `ERR_REVOKED`, `ERR_INVALID_SIG`, `ERR_NONCE_MISMATCH`,
+    `ERR_SCOPE_VIOLATION`, `ERR_INVALID_NPI`, `ERR_CHAIN_NARROWING`,
+    `ERR_CHAIN_TOO_LONG`). Covered by 21 tests in `tests/test_identity.py`.
+  - `nhid_cas.py` added: exact `CAS = F_IAF × F_NOCF × ECF` formula, the
+    `NOCF = C×E×S×L_hat×(1−R)` sub-formula with `w_H=0.40/w_P=0.35/w_I=0.25`,
+    and the five-tier CAS ladder (Verified Trust/L2, Conditional Trust/L1, Review
+    Required, Denied/Degraded, Hard Denial). Covered by 27 tests in
+    `tests/test_nhid_cas.py`.
+  - §4.3 and §4.4 of this archive rewritten to describe the real implementation
+    in place of the prior "v1.4 preview" / "`[Missing]`" language.
+- **Not changed:** the exact "42 vs. 26 tests" discrepancy between the two external
+  PDFs themselves is moot now that real, verified counts exist in this repository
+  (21 + 27 = 48); no attempt was made to reconcile the PDFs' own numbers with each
+  other. The author-name variants across the four PDFs ("Brianna Baynard" /
+  "Brianna Baynard (Independent)" / "Brianna Nicole Baynard-Malone") were not
+  resolved here — that is a personal/business decision, not a code-vs-docs
+  question, and is flagged for the document owner rather than silently picked.
+
+---
+
+*End of NHID-Clinical Master Knowledge Archive v1.2*
+
+*Document originally compiled 2026-06-12 from 358 source files across NHID-Clinical-SaaS repository; reconciled and extended 2026-06-18.*
 *All material traceable to source. Inferred content labeled [Inferred]. Gaps labeled [Missing] or [Open Question].*
 *Author of underlying work: Brianna Baynard · contact@nhid-clinical.org · NIST-2025-0035-0026*
 
