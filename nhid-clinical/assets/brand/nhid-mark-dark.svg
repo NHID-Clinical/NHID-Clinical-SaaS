@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="NHID-Clinical mark">
+  <defs>
+    <linearGradient id="dg-left" x1="0" y1="0" x2="0.25" y2="1"><stop offset="0" stop-color="#2DD4BF"/><stop offset="1" stop-color="#5EEAD4"/></linearGradient>
+    <linearGradient id="dg-top" x1="0" y1="0" x2="0.25" y2="1"><stop offset="0" stop-color="#60A5FA"/><stop offset="1" stop-color="#2DD4BF"/></linearGradient>
+    <linearGradient id="dg-bottom" x1="0" y1="0" x2="0.25" y2="1"><stop offset="0" stop-color="#2DD4BF"/><stop offset="1" stop-color="#7DF0F4"/></linearGradient>
+    <linearGradient id="dg-dot" x1="0" y1="0" x2="0.25" y2="1"><stop offset="0" stop-color="#7EB8FA"/><stop offset="1" stop-color="#67E8F9"/></linearGradient>
+    <linearGradient id="dg-ibody" x1="0" y1="0" x2="0.25" y2="1"><stop offset="0" stop-color="#67E8F9"/><stop offset="1" stop-color="#A5F3FC"/></linearGradient>
+    <linearGradient id="dsheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.38"/><stop offset="0.42" stop-color="#FFFFFF" stop-opacity="0.08"/><stop offset="0.62" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>
+    <filter id="dsoft" x="-25%" y="-25%" width="150%" height="150%"><feDropShadow dx="0" dy="0" stdDeviation="14" flood-color="#2DD4BF" flood-opacity="0.32"/></filter>
+  </defs>
+  <g filter="url(#dsoft)">
+    <path d="M44.0 198.0Q44.0 168.0 74.0 168.0L134.0 168.0Q164.0 168.0 164.0 198.0L164.0 314.0Q164.0 344.0 134.0 344.0L74.0 344.0Q44.0 344.0 44.0 314.0L44.0 198.0Z" fill="url(#dg-left)"/>
+    <path d="M44.0 198.0Q44.0 168.0 74.0 168.0L134.0 168.0Q164.0 168.0 164.0 198.0L164.0 314.0Q164.0 344.0 134.0 344.0L74.0 344.0Q44.0 344.0 44.0 314.0L44.0 198.0Z" fill="url(#dsheen)"/>
+    <path d="M44.0 198.0Q44.0 168.0 74.0 168.0L134.0 168.0Q164.0 168.0 164.0 198.0L164.0 314.0Q164.0 344.0 134.0 344.0L74.0 344.0Q44.0 344.0 44.0 314.0L44.0 198.0Z" fill="none" stroke="rgba(255,255,255,0.38)" stroke-width="2.5"/>
+    <path d="M180.0 70.0Q180.0 36.0 214.0 36.0L302.0 36.0Q336.0 36.0 336.0 70.0L336.0 316.0Q336.0 342.0 316.6 324.6L199.4 219.4Q180.0 202.0 180.0 176.0L180.0 70.0Z" fill="url(#dg-top)"/>
+    <path d="M180.0 70.0Q180.0 36.0 214.0 36.0L302.0 36.0Q336.0 36.0 336.0 70.0L336.0 316.0Q336.0 342.0 316.6 324.6L199.4 219.4Q180.0 202.0 180.0 176.0L180.0 70.0Z" fill="url(#dsheen)"/>
+    <path d="M180.0 70.0Q180.0 36.0 214.0 36.0L302.0 36.0Q336.0 36.0 336.0 70.0L336.0 316.0Q336.0 342.0 316.6 324.6L199.4 219.4Q180.0 202.0 180.0 176.0L180.0 70.0Z" fill="none" stroke="rgba(255,255,255,0.38)" stroke-width="2.5"/>
+    <path d="M180.0 288.0Q180.0 262.0 199.4 279.4L316.6 384.6Q336.0 402.0 336.0 428.0L336.0 442.4Q336.0 476.0 302.4 476.0L214.0 476.0Q180.0 476.0 180.0 442.0L180.0 288.0Z" fill="url(#dg-bottom)"/>
+    <path d="M180.0 288.0Q180.0 262.0 199.4 279.4L316.6 384.6Q336.0 402.0 336.0 428.0L336.0 442.4Q336.0 476.0 302.4 476.0L214.0 476.0Q180.0 476.0 180.0 442.0L180.0 288.0Z" fill="url(#dsheen)"/>
+    <path d="M180.0 288.0Q180.0 262.0 199.4 279.4L316.6 384.6Q336.0 402.0 336.0 428.0L336.0 442.4Q336.0 476.0 302.4 476.0L214.0 476.0Q180.0 476.0 180.0 442.0L180.0 288.0Z" fill="none" stroke="rgba(255,255,255,0.38)" stroke-width="2.5"/>
+    <circle cx="398" cy="168" r="44" fill="url(#dg-dot)"/>
+    <circle cx="398" cy="168" r="44" fill="url(#dsheen)"/>
+    <circle cx="398" cy="168" r="44" fill="none" stroke="rgba(255,255,255,0.38)" stroke-width="2.5"/>
+    <path d="M354.0 266.0Q354.0 240.0 380.0 240.0L416.0 240.0Q442.0 240.0 442.0 266.0L442.0 318.0Q442.0 344.0 416.0 344.0L380.0 344.0Q354.0 344.0 354.0 318.0L354.0 266.0Z" fill="url(#dg-ibody)"/>
+    <path d="M354.0 266.0Q354.0 240.0 380.0 240.0L416.0 240.0Q442.0 240.0 442.0 266.0L442.0 318.0Q442.0 344.0 416.0 344.0L380.0 344.0Q354.0 344.0 354.0 318.0L354.0 266.0Z" fill="url(#dsheen)"/>
+    <path d="M354.0 266.0Q354.0 240.0 380.0 240.0L416.0 240.0Q442.0 240.0 442.0 266.0L442.0 318.0Q442.0 344.0 416.0 344.0L380.0 344.0Q354.0 344.0 354.0 318.0L354.0 266.0Z" fill="none" stroke="rgba(255,255,255,0.38)" stroke-width="2.5"/>
+    </g>
+</svg>
