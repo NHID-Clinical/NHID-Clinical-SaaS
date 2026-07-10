@@ -5,11 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="description" content="NHID-Clinical: Observations on AI voice agents calling payers — a voluntary, testable reference implementation by Brianna Baynard documenting disclosure, escalation, and audit patterns in B2B healthcare voice workflows."/>
   <title>NHID-Clinical | Observations on AI Voice Agents Calling Payers</title>
-  <link rel="icon" href="/assets/brand-icon.png" type="image/png"/>
+  <link rel="icon" href="/assets/brand/favicon.svg" type="image/svg+xml"/>
+  <link rel="alternate icon" href="/assets/brand-icon.png" type="image/png"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="/nhid-clinical-ui.css"/>
+  <link rel="stylesheet" href="/assets/css/premium.css"/>
   <script>try{document.documentElement.setAttribute('data-theme',localStorage.getItem('nhid-theme')||'light')}catch(e){}</script>
 </head>
 <body>
@@ -22,7 +24,7 @@
 <header class="site-header">
   <nav class="container nav" aria-label="Primary navigation">
     <a class="brand" href="/" aria-label="NHID-Clinical home">
-      <span class="brand-mark" aria-hidden="true"><img src="/assets/brand-icon.png" alt="NHID-Clinical" /></span>
+      <span class="brand-mark" aria-hidden="true"><img src="/assets/brand/nhid-mark-flat.svg" alt="NHID-Clinical" /></span>
       <span>
         <strong>NHID-Clinical</strong>
         <small>Building Trust in Healthcare Voice AI</small>
@@ -115,8 +117,8 @@
         </div>
       </div>
       <div class="hero-art" aria-label="NHID-Clinical logo">
-        <img class="theme-img theme-img-light" src="/assets/logo-light.jpg" alt="NHID-Clinical" />
-        <img class="theme-img theme-img-dark" src="/assets/logo-dark.jpg" alt="NHID-Clinical" />
+        <img class="theme-img theme-img-light" src="/assets/brand/nhid-logo-light.svg" alt="NHID-Clinical" />
+        <img class="theme-img theme-img-dark" src="/assets/brand/nhid-logo-dark.svg" alt="NHID-Clinical" />
       </div>
     </div>
   </section>
@@ -129,6 +131,10 @@
       <p style="color:var(--body);font-size:1rem;line-height:1.85;margin-top:.75rem">Only then does the system admit it's automated.</p>
       <p style="color:var(--body);font-size:1rem;line-height:1.85;margin-top:.75rem">Operational data has been shared. There's no clear record of when disclosure happened. And there's no way to know whether the credentials were real or scraped from a public directory.</p>
       <p style="color:var(--body);font-size:1rem;line-height:1.85;margin-top:.75rem">This is <strong>impersonation latency</strong> ("impersonation latency" — the operational drag when a human can't quickly tell they're talking to an AI). It wastes time, erodes trust, and creates risk on both sides of the call. And it's happening in payer–provider workflows across healthcare daily.</p>
+      <figure class="premium-3d" style="max-width:none">
+        <img src="/assets/images/3d-svg/impersonation-latency.svg" alt="Timeline comparison: without a disclosure baseline, an AI agent exchanges PHI for minutes before disclosing it is not human; with NHID-Clinical v1.3, disclosure happens on the first conversational turn so impersonation latency is near zero." loading="lazy" />
+        <figcaption>The whole exposure window is <strong>impersonation latency</strong> — measured as <strong>IL = t(disclosure) − t(connect)</strong> from required ATR-01 trace fields. Illustrative conceptual render, not measured incident data.</figcaption>
+      </figure>
       <p style="color:var(--body);font-size:1rem;line-height:1.85;margin-top:.75rem">There's a concrete version of this problem that goes beyond late disclosure: an AI can look up any provider's NPI from the public NPPES registry, call a payer, provide that valid NPI, and request claim details. The payer has no real-time way to know whether the caller is actually authorized by that provider. This isn't hypothetical — it's trivially easy with today's voice AI tools. NHID-Clinical aims to name this gap; a cryptographic authorization layer (planned for v1.4) aims to fix it.</p>
       <p style="color:var(--body);font-size:.93rem;line-height:1.75;margin-top:.75rem"><strong>Important distinction:</strong> NHID-Clinical v1.3 does <em>not</em> verify caller identity or agent authenticity. It standardizes observable disclosure and trace behaviors. The authorization gap is documented — not yet solved.</p>
       <p style="color:var(--body);font-size:.93rem;line-height:1.75;margin-top:.5rem"><strong>Payers who ask vendors to adopt NHID-Clinical gain machine&#8209;auditable trace logs for voice agent identity</strong> — no certification theatre required.</p>
@@ -166,6 +172,22 @@
         </tbody>
       </table>
       <p style="color:var(--ink-soft);font-size:.88rem;line-height:1.7;margin-top:.75rem">These are not enforceable requirements. They are a written-down starting point that vendors can reference in contracts and payers can test with the open-source conformance suite.</p>
+    </div>
+  </section>
+
+  <section class="trust-stack-section" id="trust-stack">
+    <div class="container" style="max-width:64rem">
+      <h2>Five-Layer Trust Stack</h2>
+      <p class="stack-lede">NHID-Clinical is not the whole answer — it is one layer. It sits as a behavioral disclosure baseline between carrier-level number authentication and cryptographic delegated authority, feeding a healthcare-native audit ledger and enterprise observability. Seeing the whole stack makes clear what NHID-Clinical does and, just as importantly, what it deliberately leaves to the layers above and below it.</p>
+      <figure class="trust-stack-figure">
+        <img src="/assets/images/3d-svg/trust-stack.svg" alt="Five-layer trust stack, bottom to top: Layer 0 NPI Gap (the original problem), Layer 1 STIR/SHAKEN carrier authentication, Layer 2 NHID-Clinical v1.3 behavioral disclosure baseline (IDG, PDX, DBC, EIT, ATR), Layer 3 NHID-Auth v2 cryptographic delegated authority, Layer 4 FHIR AuditEvent R4 audit logging, Layer 5 OpenTelemetry observability." loading="lazy" />
+      </figure>
+      <p class="trust-stack-disclaimer">Illustrative 3D visualization of the five-layer trust stack — conceptual render for clarity. Open voluntary proposal · NIST-2025-0035-0026 · CC BY 4.0 · not a product, not a certification.</p>
+      <div class="trust-stack-links">
+        <a href="/specification.html">Read the v1.3 specification <span aria-hidden="true">→</span></a>
+        <a href="/developers.html">Technical reference <span aria-hidden="true">→</span></a>
+        <a href="/interoperability.html">Interoperability &amp; framework mapping <span aria-hidden="true">→</span></a>
+      </div>
     </div>
   </section>
 

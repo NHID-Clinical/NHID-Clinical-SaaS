@@ -1,0 +1,142 @@
+/* ==========================================================================
+   NHID-Clinical — Premium visual layer
+   Additive stylesheet loaded after nhid-clinical-ui.css. Introduces the
+   premium 3D/glass token set (navy #0F172A · teal #14B8A6 · cyan accents)
+   used by the upgraded brand mark, feature figures, and the Trust Stack
+   section. Nothing here overrides existing layout — it only styles the new
+   premium components and refines the brand mark presentation.
+   ========================================================================== */
+
+:root {
+  --p-navy: #0f172a;
+  --p-navy-2: #16233e;
+  --p-navy-3: #0b1120;
+  --p-border: #1e2a44;
+  --p-teal: #14b8a6;
+  --p-teal-hi: #2dd4bf;
+  --p-cyan: #38bdf8;
+  --p-gold: #d4a94c;
+  --p-slate: #8fa6c4;
+  --p-silver: #c7d5e8;
+  --p-radius: 12px;
+  --p-shadow: 0 24px 60px rgba(8, 15, 30, 0.45);
+}
+
+/* --- Brand mark refinement -------------------------------------------------
+   The upgraded mark is a transparent SVG with its own silhouette, so it
+   should sit uncropped rather than being cover-clipped inside a rounded box. */
+.brand-mark {
+  border-radius: 0;
+  overflow: visible;
+  background: none;
+}
+.brand-mark img {
+  object-fit: contain;
+  filter: drop-shadow(0 4px 10px rgba(15, 23, 42, 0.18));
+}
+[data-theme="dark"] .brand-mark img {
+  filter: drop-shadow(0 0 12px rgba(45, 212, 191, 0.35));
+}
+
+/* --- Premium framed figure -------------------------------------------------
+   Wrapper for the glass/metallic diagram set. Renders on a deep-navy plate
+   with a soft border and shadow so the SVGs read as one cohesive system in
+   both light and dark themes. */
+.premium-3d {
+  margin: 1.75rem 0;
+  padding: 0;
+  background: linear-gradient(180deg, var(--p-navy-2), var(--p-navy-3));
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius);
+  box-shadow: var(--p-shadow);
+  overflow: hidden;
+}
+.premium-3d > img,
+.premium-3d > svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.premium-3d figcaption,
+.premium-caption {
+  margin: 0;
+  padding: 0.7rem 1.1rem 0.9rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--p-slate);
+  background: rgba(8, 15, 30, 0.55);
+  border-top: 1px solid var(--p-border);
+}
+.premium-caption strong { color: var(--p-silver); font-weight: 600; }
+
+/* --- Trust Stack section ---------------------------------------------------- */
+.trust-stack-section {
+  background:
+    radial-gradient(120% 90% at 50% -10%, #16233e 0%, var(--p-navy) 55%, var(--p-navy-3) 100%);
+  color: var(--p-silver);
+  padding: 3.5rem 0 4rem;
+  border-block: 1px solid var(--p-border);
+}
+.trust-stack-section h2 { color: #eaf1fb; }
+.trust-stack-section .stack-lede {
+  color: var(--p-slate);
+  max-width: 46rem;
+  font-size: 1rem;
+  line-height: 1.7;
+  margin: 0.6rem 0 0;
+}
+.trust-stack-figure {
+  margin: 2rem 0 0;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius);
+  box-shadow: var(--p-shadow);
+  overflow: hidden;
+}
+.trust-stack-figure img { display: block; width: 100%; height: auto; }
+.trust-stack-disclaimer {
+  margin: 1.1rem 0 0;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: #5a7292;
+}
+.trust-stack-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.4rem;
+}
+.trust-stack-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.95rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--p-teal-hi);
+  text-decoration: none;
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  border-radius: 999px;
+  background: rgba(20, 184, 166, 0.08);
+  transition: background 180ms ease, border-color 180ms ease;
+}
+.trust-stack-links a:hover {
+  background: rgba(20, 184, 166, 0.16);
+  border-color: rgba(45, 212, 191, 0.6);
+}
+.trust-stack-links a:focus-visible {
+  outline: 2px solid var(--p-teal-hi);
+  outline-offset: 2px;
+}
+
+/* --- Control icon chips ----------------------------------------------------- */
+.control-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+  vertical-align: -0.28rem;
+  color: var(--p-teal);
+}
+[data-theme="dark"] .control-icon { color: var(--p-teal-hi); }
+
+@media (max-width: 720px) {
+  .trust-stack-section { padding: 2.5rem 0 3rem; }
+}
