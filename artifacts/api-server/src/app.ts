@@ -1,12 +1,24 @@
-import express, { type Express } from "express";
+import express, { type Express, type RequestHandler } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import pinoHttp from "pino-http";
+import pinoHttpModule from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { authMiddleware } from "./middlewares/authMiddleware";
 import { db, sessionsTable } from "@workspace/db";
 import { lt } from "drizzle-orm";
+
+const pinoHttp = pinoHttpModule as unknown as (options: unknown) => RequestHandler;
+
+type SerializedRequest = {
+  id?: string | number;
+  method?: string;
+  url?: string;
+};
+
+type SerializedResponse = {
+  statusCode?: number;
+};
 
 const app: Express = express();
 
@@ -14,14 +26,14 @@ app.use(
   pinoHttp({
     logger,
     serializers: {
-      req(req) {
+      req(req: SerializedRequest) {
         return {
           id: req.id,
           method: req.method,
           url: req.url?.split("?")[0],
         };
       },
-      res(res) {
+      res(res: SerializedResponse) {
         return {
           statusCode: res.statusCode,
         };
