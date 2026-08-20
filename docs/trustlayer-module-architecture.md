@@ -44,6 +44,7 @@ Supporting, not user-facing as modules:
 | Billing and plan entitlement | `nhid-clinical/saas_layer/billing.py`, `stripe_billing.py`, `stripe_client.py` |
 | Dashboard / console UI | `artifacts/nhid-saas/`, `artifacts/mockup-sandbox/`, `nhid-clinical/replit_dashboard/` |
 | API surface | `artifacts/api-server/`, `lib/api-spec`, `lib/api-zod`, `lib/api-client-react` |
+| Shadow Pilot operations (internal) | `artifacts/nhid-clinical-operations/` |
 
 ## The audit core
 
@@ -55,6 +56,35 @@ with what the Agent Registry, Trust Gateway, and Evidence Center pages describe.
 
 Its `valid_chain` flag is the property the Evidence Center's claim of replayable event
 history ultimately rests on.
+
+## Shadow Pilot operations workspace
+
+`artifacts/nhid-clinical-operations/` is the internal workspace for running Shadow Pilots:
+the partner pipeline, the operations inbox, the knowledge base, call-evaluation scoring,
+consultant training records, the content calendar, and competitive intelligence. It is
+staff-facing — not a customer-facing TrustLayer module — and is deliberately not wired
+into the module map above.
+
+Two things about it matter to the rest of this document:
+
+**It runs its own copy of the five controls.** `server/policyEngine.ts` implements IDG-01,
+PDX-01, DBC-01, EIT-01 and ATR-01 as explainable heuristics over a parsed transcript. This
+is a *second* implementation of controls the open framework also defines, which is exactly
+the drift risk the non-negotiable constraint above exists to prevent. It should be
+reconciled with the framework's deterministic controls rather than allowed to diverge —
+the package's scoring is a triage aid for operators reviewing sampled calls, not a
+conformance verdict.
+
+**It reports "not evaluated" rather than a pass.** When a transcript contains no trigger
+for a control — nobody requested PHI, nobody asked to escalate — that control is excluded
+from the overall grade instead of scoring an A. This is the same discipline as the claims
+rules below: absence of evidence is not evidence of conformance, and a scorecard that
+rounds it up to a pass is making a claim it cannot support.
+
+An open item: the workspace issues completion certificates to consultants who finish
+modules 101–107. That is training-completion record-keeping, not conformance
+certification, but the wording should be checked against the "no certification claims"
+rule before anything leaves the building.
 
 ## Claims discipline
 

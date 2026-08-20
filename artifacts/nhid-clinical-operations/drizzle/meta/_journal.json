@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1786691074615,
+      "tag": "0000_premium_giant_girl",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1786691352583,
+      "tag": "0001_windy_killraven",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1786693483681,
+      "tag": "0002_nosy_black_bolt",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1786693743944,
+      "tag": "0003_rainy_black_widow",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1786734858080,
+      "tag": "0004_operational_hardening",
+      "breakpoints": true
+    }
+  ]
+}
