@@ -33,9 +33,9 @@ implementation first, and TrustLayer picks it up as a pinned dependency.
 |---|---|---|---|
 | `/platform/agent-registry.html` | Agent Registry | Source of truth for agent identity: agent ID, organization, vendor, owner, purpose, permissions, expiration, status | `nhid-clinical/saas_layer/auth.py`, `nhid-clinical/saas_layer/db.py`, `lib/db`, `lib/api-spec` |
 | `/platform/trust-gateway.html` | Trust Gateway | Runtime enforcement — identity verification, authorization, disclosure check, scope enforcement, audit event | `nhid-clinical/saas_layer/gateway.py`, `nhid-clinical/saas_layer/nhid_client.py`, `nhid-clinical/saas_layer/voice_policy.py` |
-| `/platform/evidence-center.html` | Evidence Center | Audit-ready evidence: compliance reports, evidence packages, event history, governance exports | `nhid-clinical/saas_layer/audit.py`, `artifacts/nhid-audit-core/` |
+| `/platform/evidence-center.html` | Evidence Center | Audit-ready evidence: compliance reports, evidence packages, event history, governance exports | `nhid-clinical/saas_layer/audit.py` (`artifacts/nhid-audit-core/` is superseded — see README) |
 | `/platform/continuous-conformance.html` | Continuous Conformance | Static conformance tests as ongoing monitoring, re-run on agent change | `nhid-clinical/saas_layer/nhid_client.py`, `nhid-clinical/saas_layer/usage.py` |
-| `/platform/enterprise.html` | Enterprise Workflow | SSO, RBAC, approvals, integrations, SIEM export | `lib/replit-auth-web`, `nhid-clinical/saas_layer/auth.py`, `artifacts/api-server/` |
+| `/platform/enterprise.html` | Enterprise Workflow | SSO, RBAC, approvals, integrations, SIEM export | `nhid-clinical/saas_layer/auth.py` (the Replit auth chain is a deprecated scaffold, not an implementation of this) |
 
 Supporting, not user-facing as modules:
 
@@ -43,7 +43,8 @@ Supporting, not user-facing as modules:
 |---|---|
 | Billing and plan entitlement | `nhid-clinical/saas_layer/billing.py`, `stripe_billing.py`, `stripe_client.py` |
 | Dashboard / console UI | `artifacts/nhid-saas/`, `artifacts/mockup-sandbox/`, `nhid-clinical/replit_dashboard/` |
-| API surface | `artifacts/api-server/`, `lib/api-spec`, `lib/api-zod`, `lib/api-client-react` |
+| API surface | `nhid-clinical/saas_layer/gateway.py` — the current SaaS control-plane backend |
+| Deprecated authentication scaffold | `artifacts/api-server/` plus `lib/db`, `lib/api-zod`, `lib/api-client-react`, `lib/replit-auth-web`, `lib/api-spec`. No product endpoints; nothing imports it. Retained pending removal — see README. |
 | Shadow Pilot operations (internal) | `artifacts/nhid-clinical-operations/` |
 
 ## The audit core
