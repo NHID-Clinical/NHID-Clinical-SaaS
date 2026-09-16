@@ -1,0 +1,114 @@
+name: CI
+
+# Runs on every pull request into main, and on main itself. Before this
+# workflow existed the repository had no PR gate at all: the only
+# pull_request-triggered job was a Jekyll template that did not apply to this
+# monorepo, which is how a TypeScript build break reached main unnoticed.
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python — tests, startup and config validation
+    runs-on: ubuntu-latest
+
+    # The gateway reads DATABASE_URL at import time, so the suite needs a real
+    # database rather than a connection string. Without this service
+    # tests/test_voice_enforcement.py (77 tests) errors during collection.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nhid_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nhid_ci
+      # CI-only values. Real secrets are never needed to run the suite, and
+      # these must never be reused anywhere else.
+      HMAC_SECRET: ci-only-hmac-secret-not-for-any-deployment
+      ADMIN_PASS: ci-only-admin-password-not-for-any-deployment
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: nhid-clinical
+        run: pip install -r requirements.txt
+
+      - name: Validate required configuration and module imports
+        working-directory: nhid-clinical
+        # Prints variable names and a present/absent verdict only — never values.
+        run: python scripts/check_startup.py
+
+      - name: Refuse to start without an admin credential
+        working-directory: nhid-clinical
+        # Regression guard for the removed fail-open default: with no admin
+        # credential configured, the startup check must fail.
+        run: |
+          if env -u ADMIN_PASS -u ADMIN_PASS_HASH python scripts/check_startup.py; then
+            echo "::error::Startup check passed without an admin credential — the fail-open default may have been reintroduced."
+            exit 1
+          fi
+          echo "Confirmed: startup is refused when no admin credential is set."
+
+      - name: Run tests
+        working-directory: nhid-clinical
+        run: python -m pytest tests/ -q
+
+  typescript:
+    name: TypeScript — typecheck, tests and frontend build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # The repository pins no packageManager; lockfileVersion 9.0 requires
+          # pnpm 9 or newer. Pinned here so local, CI and deploy agree.
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        # --frozen-lockfile fails the build if pnpm-lock.yaml is out of date
+        # rather than silently resolving something different.
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck workspace
+        run: pnpm run typecheck
+
+      - name: Run tests
+        run: pnpm -C artifacts/nhid-clinical-operations run test
+
+      - name: Build customer frontend
+        # PORT and BASE_PATH are required by vite.config.ts; these mirror the
+        # buildCommand in artifacts/nhid-saas/vercel.json.
+        env:
+          PORT: "3000"
+          BASE_PATH: /
+        run: pnpm -C artifacts/nhid-saas run build
