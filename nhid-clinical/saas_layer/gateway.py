@@ -60,6 +60,7 @@ from saas_layer.auth import (
 from saas_layer.usage import log_request, get_usage_summary, get_recent_activity, get_global_stats
 from saas_layer.billing import get_plan, check_rate_limit, get_upgrade_path, plan_allows_voice_webhook
 from saas_layer.stripe_billing import (
+    StripeWebhookVerificationError,
     check_subscription_gate,
     create_checkout_session,
     handle_webhook,
@@ -516,7 +517,11 @@ async def billing_webhook_status():
     secret_set = bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))
     return {
         "webhook_url_path": "/saas/billing/webhook",
-        "signature_verification": "enabled" if secret_set else "disabled — set STRIPE_WEBHOOK_SECRET",
+        "signature_verification": (
+            "enabled"
+            if secret_set
+            else "unconfigured — all webhooks are REJECTED until STRIPE_WEBHOOK_SECRET is set"
+        ),
         "secret_configured": secret_set,
         "handled_events": [
             "checkout.session.completed",
@@ -541,9 +546,16 @@ async def billing_webhook(request: Request):
     try:
         result = handle_webhook(payload, sig_header)
         return JSONResponse(status_code=200, content=result)
-    except Exception as exc:
-        import traceback; traceback.print_exc()
+    except StripeWebhookVerificationError as exc:
+        # Unverified events are rejected, never processed.
         return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception:
+        # Log through the logger (which redacts) rather than printing a raw
+        # traceback, and do not return internal detail to the caller.
+        _logger.exception("STRIPE_WEBHOOK_PROCESSING_FAILED")
+        return JSONResponse(
+            status_code=500, content={"error": "Webhook processing failed."}
+        )
 
 
 @app.get("/saas/billing/plans")
