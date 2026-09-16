@@ -58,6 +58,13 @@ from saas_layer.stripe_billing import (
     migrate_billing_columns,
 )
 from saas_layer.stripe_client import get_publishable_key
+from saas_layer.admin_auth import (
+    AdminCredentials,
+    AdminCredentialError,
+    load_admin_credentials,
+    verify_password,
+    verify_username,
+)
 from saas_layer import audit as audit_svc
 from saas_layer.voice_policy import run_voice_policy
 from saas_layer import voice_policy_store
@@ -83,11 +90,11 @@ _call_id_map: Dict[str, str] = {}
 _call_id_lock = threading.Lock()
 
 
-_ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
-
-# ── Admin credentials — read from env, safe defaults for local dev ────────────
-_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-_ADMIN_PASS = os.environ.get("ADMIN_PASS", "nhidclinical1626")
+# ── Admin credentials ─────────────────────────────────────────────────────────
+# No defaults. Credentials are loaded from the environment during startup by
+# _lifespan(); if they are absent the gateway refuses to start rather than
+# falling back to a known password. See saas_layer/admin_auth.py.
+_ADMIN_CREDS: Optional[AdminCredentials] = None
 _ADMIN_SESSION_TTL = 8 * 3600  # 8 hours
 
 # ── Voice session TTL config ───────────────────────────────────────────────────
@@ -128,7 +135,17 @@ async def _voice_session_cleanup_loop() -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Start background cleanup task; yield to serve requests; cancel on shutdown."""
+    """Load required credentials, start background cleanup, then serve.
+
+    Admin credentials are mandatory. If they are missing or malformed this
+    raises, FastAPI aborts startup, and the gateway never serves a request —
+    deliberately, so that a misconfigured deployment cannot expose /admin/*
+    behind a default password.
+    """
+    global _ADMIN_CREDS
+    _ADMIN_CREDS = load_admin_credentials()
+    _logger.info("ADMIN: credentials loaded (user=%s)", _ADMIN_CREDS.username)
+
     task = asyncio.create_task(_voice_session_cleanup_loop())
     try:
         yield
@@ -1427,10 +1444,21 @@ class OrgSessionRetentionBody(BaseModel):
 async def admin_login(body: AdminLoginRequest):
     """
     Issue a persistent admin session token (SQLite-backed, 8-hour TTL).
-    Credentials are deterministic — never locked out by missing env vars.
+
+    Credentials are required configuration: the gateway refuses to start
+    without them, so there is no default-password path into /admin/*.
     """
-    if body.username != _ADMIN_USER or body.password != _ADMIN_PASS:
-        _logger.warning("ADMIN_LOGIN_FAILED username=%s", body.username)
+    creds = _ADMIN_CREDS
+    if creds is None:
+        # Startup should have made this impossible; fail closed regardless.
+        _logger.error("ADMIN_LOGIN_UNAVAILABLE: credentials not loaded")
+        raise HTTPException(status_code=503, detail="Admin authentication unavailable")
+
+    user_ok = verify_username(body.username, creds.username)
+    pass_ok = verify_password(body.password, creds.password_hash)
+    if not (user_ok and pass_ok):
+        # Log the attempt, never the supplied or expected credential.
+        _logger.warning("ADMIN_LOGIN_FAILED")
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
 
     token = str(uuid.uuid4())
@@ -1438,7 +1466,7 @@ async def admin_login(body: AdminLoginRequest):
     create_admin_session(token, expires_at)
     purge_expired_admin_sessions()
 
-    _logger.info("ADMIN_LOGIN_SUCCESS username=%s", body.username)
+    _logger.info("ADMIN_LOGIN_SUCCESS username=%s", creds.username)
     return {
         "admin_session_token": token,
         "expires_in": _ADMIN_SESSION_TTL,

@@ -464,7 +464,7 @@ The Postgres `enforce_audit_append_only()` trigger blocks any UPDATE or DELETE o
 - Session token (UUID) issued on `POST /admin/login` with username/password
 - TTL: 8 hours (`_ADMIN_SESSION_TTL = 8 * 3600`)
 - Stored in `admin_sessions` table in PostgreSQL
-- Credentials: `ADMIN_USER` env var (default: `admin`), `ADMIN_PASS` env var (default: `nhidclinical1626`)
+- Credentials: `ADMIN_USER` env var (default: `admin`), and `ADMIN_PASS_HASH` (preferred) or `ADMIN_PASS` — **required, no default**. The gateway refuses to start if neither is set.
 
 **Source:** `nhid-clinical/saas_layer/auth.py`, `nhid-clinical/saas_layer/gateway.py`
 
@@ -1061,7 +1061,8 @@ Handled Stripe events: `checkout.session.completed`, `invoice.paid`, `customer.s
 - `STRIPE_WEBHOOK_SECRET` — Required in live mode
 - `SAAS_ADMIN_KEY` — Legacy admin key (default: `nhid-admin-key-dev`)
 - `ADMIN_USER` — Admin username (default: `admin`)
-- `ADMIN_PASS` — Admin password (default: `nhidclinical1626`)
+- `ADMIN_PASS_HASH` — scrypt hash of the admin password (preferred; no plaintext in env)
+- `ADMIN_PASS` — plaintext admin password, hashed into memory at startup (fallback). One of the two is **required**; there is no default.
 - `PORT` — SaaS gateway port (default: 8010)
 - `VOICE_SESSION_TTL_HOURS` — Voice session TTL (default: 24)
 - `VOICE_SESSION_PURGE_INTERVAL_SECS` — Cleanup interval (default: 21600)
@@ -2008,7 +2009,7 @@ Key technical differentiators:
 | CORS: should `allow_origins=["*"]` be restricted? | [Needs Review] — overly permissive for production |
 | Agent revocation: should `revocation_list` persist across restarts? | [Open Question] |
 | HMAC_SECRET rotation procedure | [Missing — not yet documented] |
-| Admin credentials: `nhidclinical1626` default password | [Needs Review — should be forced to change on first deploy] |
+| Admin credentials | [Resolved — the hardcoded default was removed; credentials are now required at startup and verified against an scrypt hash. The previous default value was public in git history and must be treated as compromised wherever it was reused.] |
 | Full git branching strategy | [Missing] |
 | Public registry infrastructure design (v1.4+) | [Open Question] |
 
@@ -2083,7 +2084,7 @@ ENVIRONMENT VARIABLES
 [ ] DATABASE_URL set (Replit PostgreSQL)
 [ ] HMAC_SECRET set (not empty)
 [ ] ADMIN_USER set (not default "admin")
-[ ] ADMIN_PASS set (not default "nhidclinical1626")
+[ ] ADMIN_PASS_HASH (preferred) or ADMIN_PASS set — startup fails without one
 [ ] SAAS_ADMIN_KEY set (not default "nhid-admin-key-dev")
 
 ARCHITECTURE VERIFICATION
