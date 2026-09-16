@@ -69,7 +69,45 @@ them. They are already correct in `vercel.json`'s `buildCommand`.
 Root Directory has been repointed. Removing it first breaks the deployment
 outright, because Vercel would be building a directory that no longer exists.
 
-### 2. The backend domain is an unfilled placeholder
+### 2. `outputDirectory` did not match the build output — **fixed in this branch**
+
+`vercel.json` declared:
+
+```json
+"outputDirectory": "dist"
+```
+
+but `vite.config.ts:58` builds to `dist/public`:
+
+```js
+outDir: path.resolve(import.meta.dirname, "dist/public"),
+```
+
+Vercel would have served `dist/`, which contains only a `public/` directory and
+no `index.html` at its root — a 404 on every route, even after the Root
+Directory was corrected.
+
+Confirmed from the CI build log:
+
+```
+dist/public/index.html                 1.48 kB
+dist/public/assets/index-MQYysBTh.css  97.41 kB
+dist/public/assets/index-B3TPic7N.js   1,045.73 kB
+```
+
+`outputDirectory` is now `dist/public`. `dist/public` is the established
+convention across the repository — `artifacts/nhid-clinical-operations/vite.config.ts`
+uses it, and `artifacts/nhid-saas/.replit-artifact/artifact.toml` declares
+`publicDir = "artifacts/nhid-saas/dist/public"` — so the config was corrected to
+match the build rather than the build changed to match the config, which would
+have broken the Replit descriptor.
+
+This change is safe to make now precisely because `vercel.json` is not currently
+read: the Root Directory points elsewhere. It cannot break the present
+deployment, and it removes a failure that would otherwise appear only after
+problem 1 was fixed.
+
+### 3. The backend domain is an unfilled placeholder
 
 `artifacts/nhid-saas/vercel.json` contains:
 
@@ -106,6 +144,7 @@ The gateway refuses to start without these (see README):
 ## Pre-deployment checklist
 
 - [ ] Vercel Root Directory set to `artifacts/nhid-saas`
+- [x] `outputDirectory` matches the build output (`dist/public`) — fixed in this branch
 - [ ] `REPLACE_WITH_RAILWAY_BACKEND_DOMAIN` replaced with the real gateway domain
 - [ ] Backend deployed and reachable at that domain
 - [ ] `/saas-api/health` returns 200 through the Vercel rewrite

@@ -1,6 +1,6 @@
 {
   "buildCommand": "PORT=3000 BASE_PATH=/ pnpm build",
-  "outputDirectory": "dist",
+  "outputDirectory": "dist/public",
   "rewrites": [
     {
       "source": "/saas-api/:path*",
