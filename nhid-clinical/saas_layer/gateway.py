@@ -30,6 +30,15 @@ logging.basicConfig(
 )
 _logger = logging.getLogger("nhid.saas")
 
+# Keep credential-bearing query parameters out of log output (including
+# uvicorn's access log). Installed before any request is served.
+from saas_layer.log_redaction import install_log_redaction  # noqa: E402
+from saas_layer.webhook_auth import (  # noqa: E402
+    WEBHOOK_API_KEY_HEADER,
+    resolve_webhook_api_key as _resolve_webhook_api_key,
+)
+install_log_redaction()
+
 # Ensure nhid-clinical/ is on the path so core modules are importable
 _CLINICAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _CLINICAL_DIR not in sys.path:
@@ -1076,9 +1085,20 @@ async def update_voice_policy(
 # Twilio       — "CallSid" field (form-encoded or JSON)
 # Generic      — our own format (caller_id / session_id)
 #
-# All webhook endpoints authenticate via ?api_key= query param so the URL you
-# paste into Retell/Vapi/Twilio already carries the credential:
-#   https://<domain>/saas-api/saas/voice/webhook/incoming?api_key=<key>
+# Webhook authentication:
+#
+#   Preferred — send the key as a header:
+#     X-NHID-API-Key: <key>
+#
+#   Deprecated — ?api_key=<key> in the URL. Still accepted so existing
+#   registrations keep working, but query strings are recorded by access logs,
+#   proxies and monitoring systems. Query-param use logs a deprecation warning
+#   and will be removed after the migration window.
+#
+# Neither mechanism authenticates the *sender*: a valid key proves the caller
+# holds the org credential, not that the payload originated from Retell, Vapi
+# or Twilio. Per-vendor signature verification is a separate, unimplemented
+# control — do not describe this as vendor signature verification.
 
 def _detect_webhook_provider(body: Dict[str, Any]) -> str:
     if "call_id" in body and ("event" in body or "event_type" in body):
@@ -1172,14 +1192,16 @@ def _normalize_transcript_webhook(body: Dict[str, Any]) -> Dict[str, Any]:
 async def voice_webhook_incoming(
     request: Request,
     api_key: Optional[str] = Query(default=None),
+    x_nhid_api_key: Optional[str] = Header(default=None, alias=WEBHOOK_API_KEY_HEADER),
 ):
     """
     Webhook receiver for incoming calls from Retell AI, Vapi, Twilio, or any
     platform that can POST to a URL.  Auto-detects the provider from the payload
     shape, creates an NHID session, and returns the required AI disclosure.
 
-    Auth: add ?api_key=<your-key> to the URL you register in your provider's
-    dashboard — no custom headers needed.
+    Auth: send X-NHID-API-Key: <your-key>. The ?api_key= query parameter is
+    still accepted for existing registrations but is deprecated — query strings
+    are captured by access logs and proxies.
 
     Retell:  call_id + event at top level
     Vapi:    message.type + message.call.id
@@ -1189,14 +1211,9 @@ async def voice_webhook_incoming(
     Returns { session_id, provider_call_id, provider, action, disclosure_text }.
     Use provider_call_id to correlate subsequent transcript events.
     """
-    if not api_key:
-        raise HTTPException(
-            status_code=401,
-            detail=(
-                "api_key query parameter required. "
-                "Webhook URL format: /saas/voice/webhook/incoming?api_key=<your-key>"
-            ),
-        )
+    api_key = _resolve_webhook_api_key(
+        x_nhid_api_key, api_key, "/saas/voice/webhook/incoming"
+    )
     org = validate_api_key(api_key)
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
@@ -1278,11 +1295,13 @@ async def voice_webhook_incoming(
 async def voice_webhook_transcript(
     request: Request,
     api_key: Optional[str] = Query(default=None),
+    x_nhid_api_key: Optional[str] = Header(default=None, alias=WEBHOOK_API_KEY_HEADER),
 ):
     """
     Webhook receiver for real-time transcript events from Retell, Vapi, Twilio, etc.
 
-    Auth: ?api_key=<your-key> in the webhook URL.
+    Auth: send X-NHID-API-Key: <your-key>. The ?api_key= query parameter is
+    still accepted but deprecated.
 
     Session lookup order:
       1. provider_call_id from the normalised payload → looked up in _call_id_map
@@ -1292,8 +1311,9 @@ async def voice_webhook_transcript(
     Returns the same { action, reason_code, session_id, event_hash } shape as
     /saas/voice/transcript, plus provider and provider_call_id echo-back.
     """
-    if not api_key:
-        raise HTTPException(status_code=401, detail="api_key query parameter required.")
+    api_key = _resolve_webhook_api_key(
+        x_nhid_api_key, api_key, "/saas/voice/webhook/transcript"
+    )
     org = validate_api_key(api_key)
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")

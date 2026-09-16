@@ -124,8 +124,12 @@ app = FastAPI()
 
 NHID_BASE   = "${BASE_URL}"
 NHID_APIKEY = "nhid_your_key_here"          # set via env var in production
-NHID_INCOMING   = f"{NHID_BASE}/saas/voice/webhook/incoming?api_key={NHID_APIKEY}"
-NHID_TRANSCRIPT = f"{NHID_BASE}/saas/voice/webhook/transcript?api_key={NHID_APIKEY}"
+NHID_INCOMING   = f"{NHID_BASE}/saas/voice/webhook/incoming"
+NHID_TRANSCRIPT = f"{NHID_BASE}/saas/voice/webhook/transcript"
+# Send the key as a header. The ?api_key= query parameter still works for
+# existing registrations but is deprecated: query strings are captured by
+# access logs and proxies.
+NHID_HEADERS = {"X-NHID-API-Key": NHID_APIKEY}
 
 
 @app.post("/bandwidth/voice")
@@ -146,7 +150,7 @@ async def bandwidth_voice(req: Request):
             },
         }
         async with httpx.AsyncClient() as client:
-            r = await client.post(NHID_INCOMING, json=nhid_payload)
+            r = await client.post(NHID_INCOMING, json=nhid_payload, headers=NHID_HEADERS)
         return r.json()
 
     if event_type == "transcription":
@@ -160,7 +164,7 @@ async def bandwidth_voice(req: Request):
             },
         }
         async with httpx.AsyncClient() as client:
-            r = await client.post(NHID_TRANSCRIPT, json=nhid_payload)
+            r = await client.post(NHID_TRANSCRIPT, json=nhid_payload, headers=NHID_HEADERS)
         return r.json()
 
     if event_type == "disconnect":

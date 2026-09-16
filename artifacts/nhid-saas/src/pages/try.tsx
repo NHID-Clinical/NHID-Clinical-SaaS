@@ -671,9 +671,9 @@ export default function TryPage() {
     const WHBASE = `${SAAS}/voice/webhook`;
 
     try {
-      const inRes = await fetch(`${WHBASE}/incoming?api_key=${org.api_key}`, {
+      const inRes = await fetch(`${WHBASE}/incoming`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-NHID-API-Key": org.api_key },
         body: JSON.stringify(makeIncomingPayload(webhookProvider, callId)),
       });
       if (!inRes.ok) {
@@ -688,9 +688,9 @@ export default function TryPage() {
         await new Promise(r => setTimeout(r, 800));
         if (webhookAbort.current) break;
         const turn = VOICE_TURNS[i];
-        const txRes = await fetch(`${WHBASE}/transcript?api_key=${org.api_key}`, {
+        const txRes = await fetch(`${WHBASE}/transcript`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-NHID-API-Key": org.api_key },
           body: JSON.stringify(makeTranscriptPayload(webhookProvider, callId, turn.text, i + 1, inData.session_id)),
         });
         if (!txRes.ok) {
@@ -1660,9 +1660,9 @@ export default function TryPage() {
                       <div style={{ fontSize: 9, color: "#475569", marginBottom: 4 }}>{label}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(0,0,0,0.3)", borderRadius: 7, padding: "7px 10px", border: "1px solid rgba(255,255,255,0.04)" }}>
                         <code style={{ flex: 1, fontSize: 9, color: "#53d8fb", fontFamily: "monospace", wordBreak: "break-all" }}>
-                          {`${window.location.origin}/saas-api/saas${path}?api_key=${org.api_key.slice(0, 10)}…`}
+                          {`${window.location.origin}/saas-api/saas${path}`}
                         </code>
-                        <CopyBtn value={`${window.location.origin}/saas-api/saas${path}?api_key=${org.api_key}`} size={10} />
+                        <CopyBtn value={`${window.location.origin}/saas-api/saas${path}`} size={10} />
                       </div>
                     </div>
                   ))}
