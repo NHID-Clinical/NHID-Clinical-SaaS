@@ -51,6 +51,15 @@ HIPAA-compliant.**
   retained pending removal. `saas_layer/audit.py` is the audit implementation
   in use.
 
+## Further documentation
+
+| Document | Contents |
+|---|---|
+| `docs/DEPLOYMENT.md` | Deployment topology, the Vercel root-directory problem, the unfilled backend domain |
+| `docs/CONSOLIDATION_CANDIDATES.md` | Packages proposed for retirement — **nothing deleted yet** |
+| `docs/POLICY_ENGINE_RECONCILIATION.md` | The Python and TypeScript control implementations compared |
+| `docs/trustlayer-module-architecture.md` | Module map from the public platform pages to code |
+
 ## Running the tests
 
 Python (requires a live PostgreSQL — the gateway reads `DATABASE_URL` at import
