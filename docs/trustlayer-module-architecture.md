@@ -33,9 +33,9 @@ implementation first, and TrustLayer picks it up as a pinned dependency.
 |---|---|---|---|
 | `/platform/agent-registry.html` | Agent Registry | Source of truth for agent identity: agent ID, organization, vendor, owner, purpose, permissions, expiration, status | `nhid-clinical/saas_layer/auth.py`, `nhid-clinical/saas_layer/db.py`, `lib/db`, `lib/api-spec` |
 | `/platform/trust-gateway.html` | Trust Gateway | Runtime enforcement — identity verification, authorization, disclosure check, scope enforcement, audit event | `nhid-clinical/saas_layer/gateway.py`, `nhid-clinical/saas_layer/nhid_client.py`, `nhid-clinical/saas_layer/voice_policy.py` |
-| `/platform/evidence-center.html` | Evidence Center | Audit-ready evidence: compliance reports, evidence packages, event history, governance exports | `nhid-clinical/saas_layer/audit.py`, `artifacts/nhid-audit-core/` |
+| `/platform/evidence-center.html` | Evidence Center | Audit-ready evidence: compliance reports, evidence packages, event history, governance exports | `nhid-clinical/saas_layer/audit.py` (`artifacts/nhid-audit-core/` is superseded — see README) |
 | `/platform/continuous-conformance.html` | Continuous Conformance | Static conformance tests as ongoing monitoring, re-run on agent change | `nhid-clinical/saas_layer/nhid_client.py`, `nhid-clinical/saas_layer/usage.py` |
-| `/platform/enterprise.html` | Enterprise Workflow | SSO, RBAC, approvals, integrations, SIEM export | `lib/replit-auth-web`, `nhid-clinical/saas_layer/auth.py`, `artifacts/api-server/` |
+| `/platform/enterprise.html` | Enterprise Workflow | SSO, RBAC, approvals, integrations, SIEM export | `nhid-clinical/saas_layer/auth.py` (the Replit auth chain is a deprecated scaffold, not an implementation of this) |
 
 Supporting, not user-facing as modules:
 
@@ -43,7 +43,8 @@ Supporting, not user-facing as modules:
 |---|---|
 | Billing and plan entitlement | `nhid-clinical/saas_layer/billing.py`, `stripe_billing.py`, `stripe_client.py` |
 | Dashboard / console UI | `artifacts/nhid-saas/`, `artifacts/mockup-sandbox/`, `nhid-clinical/replit_dashboard/` |
-| API surface | `artifacts/api-server/`, `lib/api-spec`, `lib/api-zod`, `lib/api-client-react` |
+| API surface | `nhid-clinical/saas_layer/gateway.py` — the current SaaS control-plane backend |
+| Deprecated authentication scaffold | `artifacts/api-server/` plus `lib/db`, `lib/api-zod`, `lib/api-client-react`, `lib/replit-auth-web`, `lib/api-spec`. No product endpoints; nothing imports it. Retained pending removal — see `docs/CONSOLIDATION_CANDIDATES.md`. |
 | Shadow Pilot operations (internal) | `artifacts/nhid-clinical-operations/` |
 
 ## The audit core
@@ -67,13 +68,16 @@ into the module map above.
 
 Two things about it matter to the rest of this document:
 
-**It runs its own copy of the five controls.** `server/policyEngine.ts` implements IDG-01,
-PDX-01, DBC-01, EIT-01 and ATR-01 as explainable heuristics over a parsed transcript. This
-is a *second* implementation of controls the open framework also defines, which is exactly
-the drift risk the non-negotiable constraint above exists to prevent. It should be
-reconciled with the framework's deterministic controls rather than allowed to diverge —
-the package's scoring is a triage aid for operators reviewing sampled calls, not a
-conformance verdict.
+**It grades the five controls for human reviewers.** `server/policyEngine.ts` produces an
+explainable scorecard over a parsed transcript — per-control status, grade, finding and
+quoted evidence. It is a triage aid for operators reviewing sampled calls, not a
+conformance verdict, and it sits in no call path.
+
+This is *not* a competing implementation of the runtime gate: the Python engine decides
+whether a turn is allowed during a call; this one explains, afterwards, how a call went.
+They do answer overlapping questions about what each control means, though, and those
+definitions can drift. See `docs/POLICY_ENGINE_RECONCILIATION.md` for the full comparison
+and what reconciliation requires.
 
 **It reports "not evaluated" rather than a pass.** When a transcript contains no trigger
 for a control — nobody requested PHI, nobody asked to escalate — that control is excluded

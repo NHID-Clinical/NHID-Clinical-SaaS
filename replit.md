@@ -1,4 +1,14 @@
-# NHID Audit Core
+# NHID Audit Core (superseded)
+
+> **Status:** this standalone service is superseded by
+> `nhid-clinical/saas_layer/audit.py`, which is the audit implementation the
+> product uses. It is retained pending removal and should not be treated as the
+> current backend. See the repository README for architecture terminology.
+>
+> It also has known defects: passwords are stored and compared in plaintext,
+> and `/agent/issue`, `/trace/append` and `/auth/verify` require no
+> authentication. Do not deploy it.
+
 
 A tamper-evident audit logging engine for AI/agent-driven healthcare workflows. Proves what an agent did, when it did it, and whether it was authorized at that moment.
 

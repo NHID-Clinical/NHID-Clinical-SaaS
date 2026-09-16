@@ -30,6 +30,15 @@ logging.basicConfig(
 )
 _logger = logging.getLogger("nhid.saas")
 
+# Keep credential-bearing query parameters out of log output (including
+# uvicorn's access log). Installed before any request is served.
+from saas_layer.log_redaction import install_log_redaction  # noqa: E402
+from saas_layer.webhook_auth import (  # noqa: E402
+    WEBHOOK_API_KEY_HEADER,
+    resolve_webhook_api_key as _resolve_webhook_api_key,
+)
+install_log_redaction()
+
 # Ensure nhid-clinical/ is on the path so core modules are importable
 _CLINICAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _CLINICAL_DIR not in sys.path:
@@ -51,6 +60,7 @@ from saas_layer.auth import (
 from saas_layer.usage import log_request, get_usage_summary, get_recent_activity, get_global_stats
 from saas_layer.billing import get_plan, check_rate_limit, get_upgrade_path, plan_allows_voice_webhook
 from saas_layer.stripe_billing import (
+    StripeWebhookVerificationError,
     check_subscription_gate,
     create_checkout_session,
     handle_webhook,
@@ -58,6 +68,13 @@ from saas_layer.stripe_billing import (
     migrate_billing_columns,
 )
 from saas_layer.stripe_client import get_publishable_key
+from saas_layer.admin_auth import (
+    AdminCredentials,
+    AdminCredentialError,
+    load_admin_credentials,
+    verify_password,
+    verify_username,
+)
 from saas_layer import audit as audit_svc
 from saas_layer.voice_policy import run_voice_policy
 from saas_layer import voice_policy_store
@@ -83,11 +100,11 @@ _call_id_map: Dict[str, str] = {}
 _call_id_lock = threading.Lock()
 
 
-_ADMIN_KEY = os.environ.get("SAAS_ADMIN_KEY", "nhid-admin-key-dev")
-
-# ── Admin credentials — read from env, safe defaults for local dev ────────────
-_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-_ADMIN_PASS = os.environ.get("ADMIN_PASS", "nhidclinical1626")
+# ── Admin credentials ─────────────────────────────────────────────────────────
+# No defaults. Credentials are loaded from the environment during startup by
+# _lifespan(); if they are absent the gateway refuses to start rather than
+# falling back to a known password. See saas_layer/admin_auth.py.
+_ADMIN_CREDS: Optional[AdminCredentials] = None
 _ADMIN_SESSION_TTL = 8 * 3600  # 8 hours
 
 # ── Voice session TTL config ───────────────────────────────────────────────────
@@ -128,7 +145,17 @@ async def _voice_session_cleanup_loop() -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Start background cleanup task; yield to serve requests; cancel on shutdown."""
+    """Load required credentials, start background cleanup, then serve.
+
+    Admin credentials are mandatory. If they are missing or malformed this
+    raises, FastAPI aborts startup, and the gateway never serves a request —
+    deliberately, so that a misconfigured deployment cannot expose /admin/*
+    behind a default password.
+    """
+    global _ADMIN_CREDS
+    _ADMIN_CREDS = load_admin_credentials()
+    _logger.info("ADMIN: credentials loaded (user=%s)", _ADMIN_CREDS.username)
+
     task = asyncio.create_task(_voice_session_cleanup_loop())
     try:
         yield
@@ -490,7 +517,11 @@ async def billing_webhook_status():
     secret_set = bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))
     return {
         "webhook_url_path": "/saas/billing/webhook",
-        "signature_verification": "enabled" if secret_set else "disabled — set STRIPE_WEBHOOK_SECRET",
+        "signature_verification": (
+            "enabled"
+            if secret_set
+            else "unconfigured — all webhooks are REJECTED until STRIPE_WEBHOOK_SECRET is set"
+        ),
         "secret_configured": secret_set,
         "handled_events": [
             "checkout.session.completed",
@@ -515,9 +546,16 @@ async def billing_webhook(request: Request):
     try:
         result = handle_webhook(payload, sig_header)
         return JSONResponse(status_code=200, content=result)
-    except Exception as exc:
-        import traceback; traceback.print_exc()
+    except StripeWebhookVerificationError as exc:
+        # Unverified events are rejected, never processed.
         return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception:
+        # Log through the logger (which redacts) rather than printing a raw
+        # traceback, and do not return internal detail to the caller.
+        _logger.exception("STRIPE_WEBHOOK_PROCESSING_FAILED")
+        return JSONResponse(
+            status_code=500, content={"error": "Webhook processing failed."}
+        )
 
 
 @app.get("/saas/billing/plans")
@@ -1059,9 +1097,20 @@ async def update_voice_policy(
 # Twilio       — "CallSid" field (form-encoded or JSON)
 # Generic      — our own format (caller_id / session_id)
 #
-# All webhook endpoints authenticate via ?api_key= query param so the URL you
-# paste into Retell/Vapi/Twilio already carries the credential:
-#   https://<domain>/saas-api/saas/voice/webhook/incoming?api_key=<key>
+# Webhook authentication:
+#
+#   Preferred — send the key as a header:
+#     X-NHID-API-Key: <key>
+#
+#   Deprecated — ?api_key=<key> in the URL. Still accepted so existing
+#   registrations keep working, but query strings are recorded by access logs,
+#   proxies and monitoring systems. Query-param use logs a deprecation warning
+#   and will be removed after the migration window.
+#
+# Neither mechanism authenticates the *sender*: a valid key proves the caller
+# holds the org credential, not that the payload originated from Retell, Vapi
+# or Twilio. Per-vendor signature verification is a separate, unimplemented
+# control — do not describe this as vendor signature verification.
 
 def _detect_webhook_provider(body: Dict[str, Any]) -> str:
     if "call_id" in body and ("event" in body or "event_type" in body):
@@ -1155,14 +1204,16 @@ def _normalize_transcript_webhook(body: Dict[str, Any]) -> Dict[str, Any]:
 async def voice_webhook_incoming(
     request: Request,
     api_key: Optional[str] = Query(default=None),
+    x_nhid_api_key: Optional[str] = Header(default=None, alias=WEBHOOK_API_KEY_HEADER),
 ):
     """
     Webhook receiver for incoming calls from Retell AI, Vapi, Twilio, or any
     platform that can POST to a URL.  Auto-detects the provider from the payload
     shape, creates an NHID session, and returns the required AI disclosure.
 
-    Auth: add ?api_key=<your-key> to the URL you register in your provider's
-    dashboard — no custom headers needed.
+    Auth: send X-NHID-API-Key: <your-key>. The ?api_key= query parameter is
+    still accepted for existing registrations but is deprecated — query strings
+    are captured by access logs and proxies.
 
     Retell:  call_id + event at top level
     Vapi:    message.type + message.call.id
@@ -1172,14 +1223,9 @@ async def voice_webhook_incoming(
     Returns { session_id, provider_call_id, provider, action, disclosure_text }.
     Use provider_call_id to correlate subsequent transcript events.
     """
-    if not api_key:
-        raise HTTPException(
-            status_code=401,
-            detail=(
-                "api_key query parameter required. "
-                "Webhook URL format: /saas/voice/webhook/incoming?api_key=<your-key>"
-            ),
-        )
+    api_key = _resolve_webhook_api_key(
+        x_nhid_api_key, api_key, "/saas/voice/webhook/incoming"
+    )
     org = validate_api_key(api_key)
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
@@ -1261,11 +1307,13 @@ async def voice_webhook_incoming(
 async def voice_webhook_transcript(
     request: Request,
     api_key: Optional[str] = Query(default=None),
+    x_nhid_api_key: Optional[str] = Header(default=None, alias=WEBHOOK_API_KEY_HEADER),
 ):
     """
     Webhook receiver for real-time transcript events from Retell, Vapi, Twilio, etc.
 
-    Auth: ?api_key=<your-key> in the webhook URL.
+    Auth: send X-NHID-API-Key: <your-key>. The ?api_key= query parameter is
+    still accepted but deprecated.
 
     Session lookup order:
       1. provider_call_id from the normalised payload → looked up in _call_id_map
@@ -1275,8 +1323,9 @@ async def voice_webhook_transcript(
     Returns the same { action, reason_code, session_id, event_hash } shape as
     /saas/voice/transcript, plus provider and provider_call_id echo-back.
     """
-    if not api_key:
-        raise HTTPException(status_code=401, detail="api_key query parameter required.")
+    api_key = _resolve_webhook_api_key(
+        x_nhid_api_key, api_key, "/saas/voice/webhook/transcript"
+    )
     org = validate_api_key(api_key)
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
@@ -1427,10 +1476,21 @@ class OrgSessionRetentionBody(BaseModel):
 async def admin_login(body: AdminLoginRequest):
     """
     Issue a persistent admin session token (SQLite-backed, 8-hour TTL).
-    Credentials are deterministic — never locked out by missing env vars.
+
+    Credentials are required configuration: the gateway refuses to start
+    without them, so there is no default-password path into /admin/*.
     """
-    if body.username != _ADMIN_USER or body.password != _ADMIN_PASS:
-        _logger.warning("ADMIN_LOGIN_FAILED username=%s", body.username)
+    creds = _ADMIN_CREDS
+    if creds is None:
+        # Startup should have made this impossible; fail closed regardless.
+        _logger.error("ADMIN_LOGIN_UNAVAILABLE: credentials not loaded")
+        raise HTTPException(status_code=503, detail="Admin authentication unavailable")
+
+    user_ok = verify_username(body.username, creds.username)
+    pass_ok = verify_password(body.password, creds.password_hash)
+    if not (user_ok and pass_ok):
+        # Log the attempt, never the supplied or expected credential.
+        _logger.warning("ADMIN_LOGIN_FAILED")
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
 
     token = str(uuid.uuid4())
@@ -1438,7 +1498,7 @@ async def admin_login(body: AdminLoginRequest):
     create_admin_session(token, expires_at)
     purge_expired_admin_sessions()
 
-    _logger.info("ADMIN_LOGIN_SUCCESS username=%s", body.username)
+    _logger.info("ADMIN_LOGIN_SUCCESS username=%s", creds.username)
     return {
         "admin_session_token": token,
         "expires_in": _ADMIN_SESSION_TTL,

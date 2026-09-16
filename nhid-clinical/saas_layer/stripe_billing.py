@@ -158,18 +158,48 @@ def create_checkout_session(
     return session.url
 
 
+class StripeWebhookVerificationError(Exception):
+    """Raised when a Stripe webhook cannot be cryptographically verified.
+
+    Covers a missing STRIPE_WEBHOOK_SECRET, a missing Stripe-Signature header,
+    and a signature that does not validate. All three are treated identically:
+    the event is rejected and never processed.
+    """
+
+
 def handle_webhook(payload: bytes, sig_header: str) -> Dict[str, Any]:
+    """Verify and process a Stripe webhook.
+
+    Fails closed. Without a verified signature the event is rejected rather
+    than processed, because an unverified webhook is attacker-controlled input
+    that can grant plan entitlements (checkout.session.completed, invoice.paid).
+    """
     webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
-    if webhook_secret:
-        import stripe as _stripe
-        _stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-    else:
-        import warnings
-        warnings.warn(
-            "STRIPE_WEBHOOK_SECRET not set — skipping signature verification (dev only).",
-            stacklevel=2,
+    if not webhook_secret:
+        _logger.error(
+            "STRIPE_WEBHOOK_REJECTED reason=secret_not_configured — "
+            "set STRIPE_WEBHOOK_SECRET to process webhooks"
         )
+        raise StripeWebhookVerificationError(
+            "Webhook signature verification is not configured."
+        )
+
+    if not sig_header:
+        _logger.warning("STRIPE_WEBHOOK_REJECTED reason=missing_signature_header")
+        raise StripeWebhookVerificationError("Missing Stripe-Signature header.")
+
+    import stripe as _stripe
+    try:
+        _stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except Exception as exc:
+        # Do not echo the underlying message back to the caller; it can vary
+        # with the signature contents.
+        _logger.warning(
+            "STRIPE_WEBHOOK_REJECTED reason=signature_invalid type=%s",
+            type(exc).__name__,
+        )
+        raise StripeWebhookVerificationError("Invalid webhook signature.") from exc
 
     parsed = json.loads(payload)
     event_id = parsed.get("id", "")
