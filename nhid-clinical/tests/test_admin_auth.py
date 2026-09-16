@@ -101,6 +101,10 @@ def test_malformed_hash_env_raises_at_load():
 # ── Error messages must not leak secrets ──────────────────────────────────────
 
 def test_error_message_does_not_contain_credentials():
+    # NOTE: the retired default password appears below as a literal on purpose.
+    # This assertion exists to prove it is never echoed back. The value is
+    # already public in git history, so naming it here leaks nothing new — but
+    # a `git grep` for it will hit this line, which is expected.
     try:
         load_admin_credentials({})
     except AdminCredentialError as exc:
