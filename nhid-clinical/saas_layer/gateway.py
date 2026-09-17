@@ -82,11 +82,14 @@ from saas_layer.voice_sessions import (
     create_voice_session,
     delete_voice_session,
     extend_session as extend_voice_session,
+    get_voice_session,
     get_voice_session_for_update,
     list_voice_sessions,
     purge_old_sessions,
+    set_voice_session_authorization,
     update_voice_session_in_tx,
 )
+from saas_layer import agent_authorization, agent_registry
 from saas_layer.db import get_conn
 
 # NHID core is accessed via direct Python import (no Bridge HTTP dependency).
@@ -207,6 +210,7 @@ async def _strip_path_prefix(request: Request, call_next):
 init_db()
 migrate_billing_columns()
 voice_policy_store.init_voice_policy_table()
+agent_registry.init_agent_registry_tables()
 
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
@@ -852,6 +856,20 @@ class VoiceIncomingRequest(BaseModel):
     caller_id: Optional[str] = None
     org_id: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    # NHID-Auth v2 provider-signed delegation, presented at call setup.
+    # Optional: a call that presents none is still registered, and whether it is
+    # then allowed to proceed is decided by the org's REQUIRE_AGENT_AUTHORIZATION
+    # rule rather than here.
+    agent_passport: Optional[Dict[str, Any]] = None
+    # Telephony call identifier the passport is bound to. When supplied, a
+    # passport minted for a different call is rejected (replay defence).
+    call_sid: Optional[str] = None
+
+
+class VoiceAuthorizeRequest(BaseModel):
+    session_id: str
+    agent_passport: Dict[str, Any]
+    call_sid: Optional[str] = None
 
 
 class VoiceTranscriptRequest(BaseModel):
@@ -899,6 +917,15 @@ async def voice_incoming(body: VoiceIncomingRequest, org: Dict = Depends(get_cur
             detail="Audit trace write failed. Voice session was not recorded in the tamper-evident log.",
         )
 
+    # Agent authorization, if a credential was presented. Deliberately after the
+    # session-start trace: the session must exist and be recorded before any
+    # verdict is attached to it, so a rejected passport still leaves an audit
+    # trail of the attempt rather than disappearing with a rolled-back session.
+    authorization = None
+    if body.agent_passport is not None:
+        verdict = _record_agent_authorization(org, session_id, body.agent_passport, body.call_sid)
+        authorization = _public_verdict(verdict)
+
     log_request(org["org_id"], "/saas/voice/incoming", "POST", 200, session_id)
     disclosure_text = (
         f"This call is handled by an AI system operating on behalf of {org['org_name']}. "
@@ -908,6 +935,7 @@ async def voice_incoming(body: VoiceIncomingRequest, org: Dict = Depends(get_cur
         "session_id": session_id,
         "action": "disclose",
         "disclosure_text": disclosure_text,
+        "authorization": authorization,
     }
 
 
@@ -1004,6 +1032,210 @@ async def voice_transcript(body: VoiceTranscriptRequest, org: Dict = Depends(get
         "session_id": body.session_id,
         "event_hash": event_hash,
     }
+
+
+def _record_agent_authorization(
+    org: Dict[str, Any],
+    session_id: str,
+    passport_payload: Any,
+    call_sid: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Verify a presented passport, persist the verdict on the session, and append
+    the outcome to the tamper-evident audit chain.
+
+    Returns the verdict. Never raises for a bad passport — rejection is a
+    verdict, not a server error.
+
+    The audit event uses only the columns audit_traces already has. The chain
+    hash is computed over a fixed key set (audit._PAYLOAD_KEYS), so an extra key
+    on the event dict would be silently dropped from both the row and the hash;
+    the identifiers therefore go into input_text, which is part of the chain.
+    """
+    verdict = agent_authorization.verify_agent_passport(
+        org["org_id"], passport_payload, expected_call_sid=call_sid
+    )
+    set_voice_session_authorization(
+        session_id, agent_authorization.verdict_for_session(verdict)
+    )
+
+    # Identifiers only — agent id, NPI and delegation id. No key material and no
+    # signature bytes are written to the audit trail.
+    summary = (
+        f"agent={verdict.get('agent_id') or '-'} "
+        f"npi={verdict.get('provider_npi') or '-'} "
+        f"delegation={verdict.get('delegation_id') or '-'}"
+    )
+    event = {
+        "event_type": "voice_agent_authorization",
+        "state_before": "active",
+        "state_after": "active",
+        "input_text": summary,
+        "policy_action": "allow" if verdict["verified"] else "deny",
+        "reason_code": verdict["reason"],
+        "response_text": None,
+        "policy_version": "NHID-AUTH-v2",
+    }
+    try:
+        audit_svc.append_trace(org_id=org["org_id"], session_id=session_id, event=event)
+    except Exception as exc:
+        _logger.error(
+            "agent_authorization audit append FAILED org=%s session=%s: %s",
+            org["org_id"], session_id, exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Audit trace write failed. Authorization decision was not recorded in the tamper-evident log.",
+        )
+
+    if not verdict["verified"]:
+        _logger.info(
+            "agent authorization rejected org=%s session=%s reason=%s",
+            org["org_id"], session_id, verdict["reason"],
+        )
+    return verdict
+
+
+def _public_verdict(verdict: Dict[str, Any]) -> Dict[str, Any]:
+    """The verdict fields safe to return to the caller."""
+    return {
+        "verified": verdict["verified"],
+        "reason": verdict["reason"],
+        "agent_id": verdict.get("agent_id"),
+        "provider_npi": verdict.get("provider_npi"),
+        "delegation_id": verdict.get("delegation_id"),
+        "scope": verdict.get("scope") or [],
+        "call_sid_bound": verdict.get("call_sid_bound", False),
+    }
+
+
+@app.post("/saas/voice/authorize", tags=["Voice"])
+async def voice_authorize(body: VoiceAuthorizeRequest, org: Dict = Depends(get_current_org)):
+    """
+    Present a provider-signed agent passport for an existing voice session.
+
+    Use this when the credential is not available at call setup, or to re-present
+    a refreshed delegation mid-call. The verdict replaces any verdict already
+    recorded on the session.
+
+    Always returns 200 with a verdict; a rejected passport is an authorization
+    outcome, not a transport error. The turn-level consequence is applied by the
+    REQUIRE_AGENT_AUTHORIZATION policy rule on the next transcript chunk.
+    """
+    session = get_voice_session(body.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Voice session '{body.session_id}' not found.")
+    if session["org_id"] != org["org_id"]:
+        raise HTTPException(status_code=403, detail="Voice session does not belong to your organisation.")
+
+    verdict = _record_agent_authorization(org, body.session_id, body.agent_passport, body.call_sid)
+    log_request(org["org_id"], "/saas/voice/authorize", "POST", 200, body.session_id)
+    return {"session_id": body.session_id, "authorization": _public_verdict(verdict)}
+
+
+# ── Agent Registry: provider signing keys and revocation ──────────────────────
+#
+# A delegation is only worth checking if we know which key may sign for an NPI.
+# These endpoints are how an organisation tells the gateway that: "this Ed25519
+# public key speaks for NPI 1234567890". Without a registered key, every
+# passport claiming that NPI is denied with ERR_PROVIDER_KEY_NOT_REGISTERED.
+
+class RegisterProviderKeyRequest(BaseModel):
+    provider_npi: str
+    public_key_b64: str
+    label: Optional[str] = None
+
+
+class RevokeSubjectRequest(BaseModel):
+    subject_type: str          # "agent" | "delegation"
+    subject_id: str
+    reason: Optional[str] = None
+
+
+@app.post("/saas/agent-registry/provider-keys", tags=["Agent Registry"])
+async def register_provider_key(
+    body: RegisterProviderKeyRequest,
+    org: Dict = Depends(get_current_org),
+):
+    """
+    Register an Ed25519 public key as authorised to sign agent delegations for
+    an NPI on behalf of this organisation.
+
+    Registering the same key for the same NPI again reactivates it rather than
+    creating a duplicate, so a key revoked in error can be restored.
+    """
+    try:
+        row = agent_registry.register_provider_key(
+            org["org_id"], body.provider_npi, body.public_key_b64, body.label
+        )
+    except agent_registry.RegistryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    log_request(org["org_id"], "/saas/agent-registry/provider-keys", "POST", 200, None)
+    return row
+
+
+@app.get("/saas/agent-registry/provider-keys", tags=["Agent Registry"])
+async def list_provider_keys(
+    provider_npi: Optional[str] = None,
+    include_revoked: bool = False,
+    limit: int = 200,
+    org: Dict = Depends(get_current_org),
+):
+    """List this organisation's registered provider signing keys."""
+    rows = agent_registry.list_provider_keys(
+        org["org_id"], provider_npi=provider_npi,
+        include_revoked=include_revoked, limit=limit,
+    )
+    log_request(org["org_id"], "/saas/agent-registry/provider-keys", "GET", 200, None)
+    return {"provider_keys": rows, "count": len(rows)}
+
+
+@app.post("/saas/agent-registry/provider-keys/{key_id}/revoke", tags=["Agent Registry"])
+async def revoke_provider_key(key_id: str, org: Dict = Depends(get_current_org)):
+    """
+    Revoke a provider signing key.
+
+    This invalidates every delegation that key signed, including delegations
+    that have not yet expired — which is the point: it is the control for a
+    compromised provider key.
+    """
+    revoked = agent_registry.revoke_provider_key(org["org_id"], key_id)
+    if not revoked:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Provider key '{key_id}' not found, not yours, or already revoked.",
+        )
+    log_request(org["org_id"], f"/saas/agent-registry/provider-keys/{key_id}/revoke", "POST", 200, None)
+    return {"key_id": key_id, "status": "revoked"}
+
+
+@app.post("/saas/agent-registry/revocations", tags=["Agent Registry"])
+async def revoke_agent_subject(
+    body: RevokeSubjectRequest,
+    org: Dict = Depends(get_current_org),
+):
+    """
+    Revoke an agent (all of its delegations) or a single delegation.
+
+    Revocation is checked before signature verification, so a revoked agent
+    presenting an otherwise valid passport is still denied.
+    """
+    try:
+        row = agent_registry.revoke_subject(
+            org["org_id"], body.subject_type, body.subject_id, body.reason
+        )
+    except agent_registry.RegistryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    log_request(org["org_id"], "/saas/agent-registry/revocations", "POST", 200, None)
+    return row
+
+
+@app.get("/saas/agent-registry/revocations", tags=["Agent Registry"])
+async def list_agent_revocations(limit: int = 200, org: Dict = Depends(get_current_org)):
+    """List this organisation's agent and delegation revocations."""
+    rows = agent_registry.list_revocations(org["org_id"], limit=limit)
+    log_request(org["org_id"], "/saas/agent-registry/revocations", "GET", 200, None)
+    return {"revocations": rows, "count": len(rows)}
 
 
 @app.get("/saas/voice/policy", tags=["Voice"])
