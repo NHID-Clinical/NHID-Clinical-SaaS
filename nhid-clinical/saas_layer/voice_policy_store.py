@@ -50,10 +50,47 @@ BUILTIN_RULE_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
         "params_schema": {"phrases": "list[str]"},
     },
+    "REQUIRE_AGENT_AUTHORIZATION": {
+        "rule_key": "REQUIRE_AGENT_AUTHORIZATION",
+        "rule_type": "authorization",
+        "label": "Provider-Signed Agent Authorization",
+        "description": (
+            "Deny the turn unless the calling agent presented a provider-signed "
+            "delegation that verifies against a public key this organisation has "
+            "registered for the NPI the agent claims to act for. With 'required' "
+            "off, a call that presents no credential is allowed through, but a "
+            "credential that fails verification is still denied."
+        ),
+        "params_schema": {"required": "bool", "required_scope": "str|null"},
+    },
 }
 
 # ── Default ruleset (used when no custom config has been saved) ───────────────
+#
+# On the default posture of REQUIRE_AGENT_AUTHORIZATION
+# -----------------------------------------------------
+# It ships enabled but with ``required: False``, and it sits at priority -1 so
+# it is evaluated before anything else.
+#
+# ``required: False`` is not the rule being switched off. With no credential
+# presented the turn passes through; with a credential that fails verification
+# the turn is denied. That is the only default that both closes the
+# impersonation hole for agents that do present credentials and does not
+# instantly break every organisation already running calls without them.
+#
+# Set ``required: true`` per org to refuse any agent that cannot prove it was
+# delegated by the NPI it claims. That is the stricter posture, and it is opt-in
+# on purpose: turning it on will stop calls.
+#
 DEFAULT_RULESET: List[Dict[str, Any]] = [
+    {
+        "rule_key": "REQUIRE_AGENT_AUTHORIZATION",
+        "rule_type": "authorization",
+        "label": "Provider-Signed Agent Authorization",
+        "enabled": True,
+        "priority": -1,
+        "params": {"required": False, "required_scope": None},
+    },
     {
         "rule_key": "REQUIRE_UPFRONT_DISCLOSURE",
         "rule_type": "builtin",
