@@ -11,14 +11,20 @@ Implemented areas include:
 - voice webhook ingestion (Retell, Vapi, Twilio, generic)
 - transcript disclosure-policy evaluation
 - audit-chain generation and verification (HMAC-SHA256, constant-time)
+- provider-signed agent authorization (Ed25519 delegation with NPI binding,
+  agent co-signature, call-SID replay binding, and durable revocation)
 - internal operations tooling
 
-The provider-signed agent authorization primitive exists in the NHID-Clinical
-core (`nhid-clinical/src/agent_identity.py` — Ed25519 delegation with NPI
-binding, agent co-signature and call-SID nonce) but is **not yet integrated**
-into the SaaS authorization path. The gateway evaluates whether an AI caller
-disclosed itself and behaved correctly; it does not yet verify that the caller
-is authorized to represent the provider organization it claims.
+Agent authorization is integrated into the runtime path: an agent may present a
+provider-signed delegation, the gateway verifies it against a public key the
+organization registered for the NPI being claimed, and the verdict is enforced
+by the `REQUIRE_AGENT_AUTHORIZATION` policy rule on every turn.
+
+It ships **permissive by default** (`required: false`): a call presenting no
+credential is allowed through, while a credential that fails verification is
+denied. Refusing unauthenticated agents outright is a per-organization opt-in,
+because enabling it stops calls. See `docs/AGENT_AUTHORIZATION.md` for what a
+verified passport does and does not prove, and for the operator runbook.
 
 Before commercial deployment, the project requires:
 
@@ -28,10 +34,11 @@ Before commercial deployment, the project requires:
 - webhook signature verification
 - API-key hashing at rest
 - tenant-isolation testing
-- provider/NPI authorization integration
-- revocation enforcement
+- NPPES validation of registered NPIs (format is checked; the number is not
+  looked up)
+- delegation-chain support through the gateway (implemented in the framework,
+  not yet exposed)
 - PHI handling and retention controls
-- end-to-end authorization tests
 - deployment validation
 - threat-model validation
 

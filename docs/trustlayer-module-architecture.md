@@ -31,8 +31,8 @@ implementation first, and TrustLayer picks it up as a pinned dependency.
 
 | Public page | Module | Purpose | Relevant code here |
 |---|---|---|---|
-| `/platform/agent-registry.html` | Agent Registry | Source of truth for agent identity: agent ID, organization, vendor, owner, purpose, permissions, expiration, status | `nhid-clinical/saas_layer/auth.py`, `nhid-clinical/saas_layer/db.py`, `lib/db`, `lib/api-spec` |
-| `/platform/trust-gateway.html` | Trust Gateway | Runtime enforcement — identity verification, authorization, disclosure check, scope enforcement, audit event | `nhid-clinical/saas_layer/gateway.py`, `nhid-clinical/saas_layer/nhid_client.py`, `nhid-clinical/saas_layer/voice_policy.py` |
+| `/platform/agent-registry.html` | Agent Registry | Source of truth for agent identity: agent ID, organization, vendor, owner, purpose, permissions, expiration, status | `nhid-clinical/saas_layer/agent_registry.py` (provider signing keys, revocation), `nhid-clinical/saas_layer/auth.py`, `nhid-clinical/saas_layer/db.py` |
+| `/platform/trust-gateway.html` | Trust Gateway | Runtime enforcement — identity verification, authorization, disclosure check, scope enforcement, audit event | `nhid-clinical/saas_layer/gateway.py`, `nhid-clinical/saas_layer/agent_authorization.py`, `nhid-clinical/saas_layer/nhid_client.py`, `nhid-clinical/saas_layer/voice_policy.py` |
 | `/platform/evidence-center.html` | Evidence Center | Audit-ready evidence: compliance reports, evidence packages, event history, governance exports | `nhid-clinical/saas_layer/audit.py` (`artifacts/nhid-audit-core/` is superseded — see README) |
 | `/platform/continuous-conformance.html` | Continuous Conformance | Static conformance tests as ongoing monitoring, re-run on agent change | `nhid-clinical/saas_layer/nhid_client.py`, `nhid-clinical/saas_layer/usage.py` |
 | `/platform/enterprise.html` | Enterprise Workflow | SSO, RBAC, approvals, integrations, SIEM export | `nhid-clinical/saas_layer/auth.py` (the Replit auth chain is a deprecated scaffold, not an implementation of this) |
@@ -105,11 +105,31 @@ hold to the same line:
 - Pricing is a placeholder architecture (Community `$0`, Developer and Enterprise
   "contact for pricing"). The specification and conformance tests are never gated by a plan.
 
+## Agent authorization
+
+The Agent Registry and Trust Gateway rows above became true in the code only recently. The
+Ed25519 delegation format (`nhid-clinical/src/agent_identity.py`), the runtime gate
+(`voice_policy.check_authorization`) and the `REQUIRE_AGENT_AUTHORIZATION` rule all existed
+independently, with nothing joining them: `agent_identity` was never imported by
+`saas_layer/`, nothing ever wrote `session_state["authorization"]`, and the rule was absent
+from every shipped ruleset.
+
+`agent_registry.py` and `agent_authorization.py` close that loop. See
+`docs/AGENT_AUTHORIZATION.md` for what a verified passport does and does not prove, the
+default posture, and the operator runbook.
+
+One consequence matters for claims discipline: the platform pages describe identity
+verification as a capability. It is now genuinely implemented for agents that present a
+credential, and is **off by default** for those that do not — `required: false` in
+`DEFAULT_RULESET`. Do not describe unauthenticated calls as verified.
+
 ## Open questions
 
-- Whether the Agent Registry stores NHID-Auth passports directly or references them by key
-  identifier. The open format is defined in the framework repository; the registry should
-  consume it rather than define a parallel schema.
+- Whether the Agent Registry should store issued passports themselves, rather than only the
+  provider keys that sign them. Today it stores keys and revocations; passports are
+  presented per call and persisted only as a verdict on the session.
+- Whether to validate NPIs against NPPES at registration time. Currently the format is
+  checked and the number is not looked up.
 - How continuous conformance obtains agent version changes: vendor-reported, detected from
   call traffic, or both.
 - Retention policy defaults for the event history behind the Evidence Center.
