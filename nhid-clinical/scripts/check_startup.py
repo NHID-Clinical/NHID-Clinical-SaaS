@@ -75,6 +75,10 @@ def check_imports() -> bool:
         "saas_layer.log_redaction",
         "saas_layer.audit",
         "saas_layer.stripe_billing",
+        # Named explicitly, although gateway imports them, so that a broken
+        # cryptography install reports here rather than as a gateway failure.
+        "saas_layer.agent_registry",
+        "saas_layer.agent_authorization",
         "saas_layer.gateway",
     ]
     passed = True

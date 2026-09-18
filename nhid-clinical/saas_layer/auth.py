@@ -108,6 +108,23 @@ def init_db() -> None:
                 ALTER TABLE voice_sessions
                     ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'api'
             """)
+            # Agent authorization verdict for the session (NHID-Auth v2).
+            # auth_verified IS NULL means no passport was ever presented, which
+            # is distinct from FALSE (a passport was presented and rejected).
+            # The policy engine treats the two differently: NULL defers to the
+            # rule's `required` flag, FALSE always denies.
+            for column, ddl_type in (
+                ("auth_verified", "BOOLEAN"),
+                ("auth_reason", "TEXT"),
+                ("auth_agent_id", "TEXT"),
+                ("auth_provider_npi", "TEXT"),
+                ("auth_delegation_id", "TEXT"),
+                ("auth_scope", "TEXT"),
+                ("auth_verified_at", "TIMESTAMPTZ"),
+            ):
+                cur.execute(
+                    f"ALTER TABLE voice_sessions ADD COLUMN IF NOT EXISTS {column} {ddl_type}"
+                )
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_vs_org
                     ON voice_sessions (org_id)
