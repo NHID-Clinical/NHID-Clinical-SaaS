@@ -50,7 +50,7 @@ the link that was missing; it is not the whole trust problem.
 |---|---|
 | `saas_layer/agent_registry.py` | Which public keys may sign for an NPI; which agents and delegations are revoked |
 | `saas_layer/agent_authorization.py` | Parse a submitted passport, verify it, produce a verdict |
-| `saas_layer/voice_sessions.py` | Persist the verdict on the session; hand it to the policy engine as `session_state["authorization"]` |
+| `saas_layer/voice_sessions.py` | Persist the verdict on the session; re-check its expiry on every read; hand it to the policy engine as `session_state["authorization"]` |
 | `saas_layer/voice_policy.py` | `REQUIRE_AGENT_AUTHORIZATION` acts on the verdict (unchanged by this work) |
 
 ### Order of checks
@@ -65,6 +65,33 @@ that a revocation cannot be outrun:
 5. Provider key lookup for `(org_id, provider_npi)`
 6. Ed25519 signature verification (provider signature and agent co-signature)
 7. Call-SID binding, then scope
+
+### Expiry is re-checked on every turn
+
+The seven checks above run once, when a passport is presented. The resulting verdict is
+persisted on the session — but it is **not** a standing grant.
+
+`voice_sessions.auth_expires_at` carries the delegation's own `expires_at`, and
+`_authorization_from_row` re-checks it on every read, on both the transactional path
+(`get_voice_session_for_update`, which `voice_transcript` uses) and the plain read. Past
+its expiry, the stored verdict is downgraded to `verified: false` / `ERR_EXPIRED` with an
+empty scope.
+
+Without that, expiry would be enforced exactly once and then discarded, and a short-lived
+delegation would authorise turns for the whole session TTL — 24 hours by default, up to 7
+days per org. A 60-second credential would become a week-long one.
+
+Two details follow from it:
+
+* Because the downgraded verdict is `verified: false`, it is denied under **both**
+  `required: true` and `required: false`. The `required` flag only ever governed the
+  *absent*-credential case; it has never meant a stale credential is acceptable.
+* The row is not mutated — `auth_verified` stays `TRUE` and the downgrade happens at read
+  time, so the record that the delegation did once verify is preserved for audit.
+
+A verified row whose expiry cannot be read is treated as expired. Those rows exist only
+where a session was verified before `auth_expires_at` was added, and they age out with the
+session TTL.
 
 ## Default posture
 
@@ -133,6 +160,9 @@ rule via the existing voice policy endpoints.
 | `ERR_NONCE_MISMATCH` | Passport was minted for a different call |
 | `ERR_SCOPE_VIOLATION` | Granted scope does not cover what was required |
 
+`ERR_EXPIRED` arises in two places: at presentation, from the framework's own check, and on
+any later turn, from the session-level re-check described above.
+
 ## Design decisions worth knowing
 
 **Revocation is in Postgres, not in `AgentIdentityManager`.** The reference
@@ -163,11 +193,11 @@ the row and the hash.
 
 ## Verification
 
-`nhid-clinical/tests/test_agent_authorization.py` — 98 tests: parsing, registry and
-cross-tenant isolation, the acceptance matrix, session persistence, the policy loop, and
-ten end-to-end tests over real HTTP against a real database and a real audit chain,
-including a `verify_chain` assertion that the new event type does not break tamper
-evidence.
+`nhid-clinical/tests/test_agent_authorization.py` — 111 tests: parsing, registry and
+cross-tenant isolation, the acceptance matrix, session persistence, stored-verdict expiry,
+the policy loop, and ten end-to-end tests over real HTTP against a real database and a real
+audit chain, including a `verify_chain` assertion that the new event type does not break
+tamper evidence.
 
 ## Not done
 

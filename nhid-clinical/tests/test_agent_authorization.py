@@ -121,6 +121,12 @@ def org_id():
 
 @pytest.fixture(scope="module", autouse=True)
 def _schema():
+    # Both bootstraps, so this file stands alone: init_db() owns voice_sessions
+    # (including the auth_* columns), init_agent_registry_tables() owns
+    # provider_keys and agent_revocations. Without the former these tests pass
+    # only when some other module has already imported the gateway.
+    from saas_layer.auth import init_db
+    init_db()
     agent_registry.init_agent_registry_tables()
 
 
@@ -628,6 +634,189 @@ class TestSessionPersistence:
         stored = get_voice_session(session_id)["authorization"]
         assert stored["verified"] is False
         assert stored["reason"] == "ERR_REVOKED:agent"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Delegation expiry is re-checked on every read of the stored verdict
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestStoredVerdictExpiry:
+    """
+    A stored verdict records that a delegation verified *at presentation time*.
+    It is not a standing grant. Without re-checking, a 60-second delegation
+    would authorise turns for the whole session TTL — 24h by default, up to 7
+    days per org.
+    """
+
+    @staticmethod
+    def _verified_session(org_id, scope=("eligibility",)):
+        """Register a key, verify a passport, persist the verdict. Returns ids."""
+        from saas_layer.voice_sessions import (
+            create_voice_session, set_voice_session_authorization,
+        )
+        payload, pub = mint(scope=scope)
+        agent_registry.register_provider_key(org_id, VALID_NPI, pub)
+        verdict = agent_authorization.verify_agent_passport(org_id, payload)
+        assert verdict["verified"] is True
+
+        session_id = f"vs_{uuid.uuid4().hex[:12]}"
+        create_voice_session(session_id, org_id, provider="api")
+        set_voice_session_authorization(
+            session_id, agent_authorization.verdict_for_session(verdict)
+        )
+        return session_id, payload, verdict
+
+    @staticmethod
+    def _set_expiry(session_id, value):
+        """Force auth_expires_at, standing in for the passage of time."""
+        conn = get_conn()
+        try:
+            with conn:
+                conn.cursor().execute(
+                    "UPDATE voice_sessions SET auth_expires_at = %s WHERE session_id = %s",
+                    (value, session_id),
+                )
+        finally:
+            conn.close()
+
+    def test_auth_expires_at_is_persisted_from_the_delegation(self, org_id):
+        session_id, payload, _ = self._verified_session(org_id)
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT auth_expires_at FROM voice_sessions WHERE session_id = %s",
+                (session_id,),
+            )
+            stored = cur.fetchone()["auth_expires_at"]
+        finally:
+            conn.close()
+        assert stored is not None
+        expected = datetime.fromisoformat(payload["delegation"]["expires_at"])
+        assert stored == expected
+
+    def test_unexpired_authorization_is_still_allowed(self, org_id):
+        from saas_layer.voice_sessions import get_voice_session
+        session_id, _, _ = self._verified_session(org_id)
+        stored = get_voice_session(session_id)["authorization"]
+        assert stored["verified"] is True
+        assert stored["reason"] == "VERIFIED"
+        assert stored["scope"] == ["eligibility"]
+        decision = run_voice_policy(
+            "check eligibility", {**_CONFIRMED, "authorization": stored},
+            ruleset=_auth_rule(required=True),
+        )
+        assert decision["action"] == "allow"
+
+    def test_verified_then_expired_is_denied(self, org_id):
+        from saas_layer.voice_sessions import get_voice_session
+        session_id, _, _ = self._verified_session(org_id)
+        self._set_expiry(session_id, datetime.now(timezone.utc) - timedelta(seconds=1))
+
+        stored = get_voice_session(session_id)["authorization"]
+        assert stored["verified"] is False
+        assert stored["reason"] == "ERR_EXPIRED"
+        assert stored["scope"] == []
+
+        decision = run_voice_policy(
+            "check eligibility", {**_CONFIRMED, "authorization": stored},
+            ruleset=_auth_rule(required=True),
+        )
+        assert decision["action"] == "deny"
+        assert decision["reason_code"] == "AGENT_NOT_AUTHORIZED"
+
+    def test_verified_then_expired_is_denied_even_when_not_required(self, org_id):
+        """
+        required=False means a credential is optional, never that a stale one is
+        acceptable. An expired delegation must not ride out the session.
+        """
+        from saas_layer.voice_sessions import get_voice_session
+        session_id, _, _ = self._verified_session(org_id)
+        self._set_expiry(session_id, datetime.now(timezone.utc) - timedelta(hours=1))
+
+        stored = get_voice_session(session_id)["authorization"]
+        decision = run_voice_policy(
+            "check eligibility", {**_CONFIRMED, "authorization": stored},
+            ruleset=_auth_rule(required=False),
+        )
+        assert decision["action"] == "deny"
+        assert decision["reason_code"] == "AGENT_NOT_AUTHORIZED"
+
+    def test_expired_verdict_cannot_satisfy_a_scoped_rule(self, org_id):
+        from saas_layer.voice_sessions import get_voice_session
+        session_id, _, _ = self._verified_session(org_id, scope=("eligibility", "phi_read"))
+        self._set_expiry(session_id, datetime.now(timezone.utc) - timedelta(seconds=1))
+
+        stored = get_voice_session(session_id)["authorization"]
+        decision = run_voice_policy(
+            "read the chart", {**_CONFIRMED, "authorization": stored},
+            ruleset=_auth_rule(required=True, required_scope="phi_read"),
+        )
+        assert decision["action"] == "deny"
+
+    def test_verified_row_with_no_expiry_is_treated_as_expired(self, org_id):
+        """
+        Fail-closed: a verified row whose expiry cannot be read is not shown to
+        be unexpired. Such rows exist only where a session was verified before
+        auth_expires_at was added, and they age out with the session TTL.
+        """
+        from saas_layer.voice_sessions import get_voice_session
+        session_id, _, _ = self._verified_session(org_id)
+        self._set_expiry(session_id, None)
+
+        stored = get_voice_session(session_id)["authorization"]
+        assert stored["verified"] is False
+        assert stored["reason"] == "ERR_EXPIRED"
+
+    def test_expiry_is_rechecked_under_the_transactional_read_too(self, org_id):
+        """
+        voice_transcript reads through get_voice_session_for_update, not
+        get_voice_session. Both paths must re-check.
+        """
+        from saas_layer.voice_sessions import get_voice_session_for_update
+        session_id, _, _ = self._verified_session(org_id)
+        self._set_expiry(session_id, datetime.now(timezone.utc) - timedelta(seconds=1))
+
+        conn = get_conn()
+        try:
+            with conn:
+                state = get_voice_session_for_update(conn, session_id)
+        finally:
+            conn.close()
+        assert state["authorization"]["verified"] is False
+        assert state["authorization"]["reason"] == "ERR_EXPIRED"
+
+    def test_a_rejected_verdict_is_unaffected_by_the_expiry_check(self, org_id):
+        """A denial keeps its own reason rather than being relabelled expired."""
+        from saas_layer.voice_sessions import (
+            create_voice_session, get_voice_session, set_voice_session_authorization,
+        )
+        payload, _ = mint()
+        verdict = agent_authorization.verify_agent_passport(org_id, payload)
+        assert verdict["verified"] is False
+
+        session_id = f"vs_{uuid.uuid4().hex[:12]}"
+        create_voice_session(session_id, org_id, provider="api")
+        set_voice_session_authorization(
+            session_id, agent_authorization.verdict_for_session(verdict)
+        )
+        stored = get_voice_session(session_id)["authorization"]
+        assert stored["verified"] is False
+        assert stored["reason"] == "ERR_PROVIDER_KEY_NOT_REGISTERED"
+
+    def test_naive_stored_expiry_is_read_as_utc_not_server_local(self, org_id):
+        """
+        A naive timestamp must not be interpreted in the server's timezone —
+        the same rule the bridge applies to delegations.
+        """
+        from saas_layer.voice_sessions import _as_aware_utc
+        naive = datetime(2030, 1, 1, 12, 0, 0)
+        assert _as_aware_utc(naive) == datetime(2030, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize("bad", ["not a timestamp", "", 42, object()])
+    def test_unreadable_stored_expiry_yields_none(self, bad):
+        from saas_layer.voice_sessions import _as_aware_utc
+        assert _as_aware_utc(bad) is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

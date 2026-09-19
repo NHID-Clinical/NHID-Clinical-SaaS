@@ -263,6 +263,10 @@ def verify_agent_passport(
                 "provider_npi": result.provider_npi,
                 "delegation_id": result.delegation_id,
                 "call_sid_bound": expected_call_sid is not None,
+                # Carried so the session can re-check it on every later turn.
+                # Guaranteed offset-aware and parseable: verification refuses
+                # the passport otherwise.
+                "expires_at": d.expires_at,
             }
         failures.append(result.reason)
 
@@ -289,4 +293,7 @@ def verdict_for_session(verdict: Dict[str, Any]) -> Dict[str, Any]:
         "provider_npi": verdict.get("provider_npi"),
         "delegation_id": verdict.get("delegation_id"),
         "scope": list(verdict.get("scope") or []),
+        # Only a verified verdict carries an expiry. A rejected one denies on
+        # its own reason, so there is nothing to re-check later.
+        "expires_at": verdict.get("expires_at"),
     }

@@ -121,6 +121,11 @@ def init_db() -> None:
                 ("auth_delegation_id", "TEXT"),
                 ("auth_scope", "TEXT"),
                 ("auth_verified_at", "TIMESTAMPTZ"),
+                # The delegation's own expiry, carried onto the session so that
+                # every later turn can re-check it. Without this the expiry is
+                # enforced once, at presentation, and a short-lived delegation
+                # would keep authorising turns for the whole session TTL.
+                ("auth_expires_at", "TIMESTAMPTZ"),
             ):
                 cur.execute(
                     f"ALTER TABLE voice_sessions ADD COLUMN IF NOT EXISTS {column} {ddl_type}"
