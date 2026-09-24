@@ -18,6 +18,13 @@ import TryPage from "@/pages/try";
 import DocsSDKPage from "@/pages/docs-sdk";
 import PricingPage from "@/pages/pricing";
 import SettingsPage from "@/pages/settings";
+import OpsOverview from "@/pages/ops/overview";
+import OpsInteractions from "@/pages/ops/interactions";
+import OpsInteractionDetail from "@/pages/ops/interaction-detail";
+import { OpsFindings, OpsFindingDetail } from "@/pages/ops/findings";
+import OpsEvidence from "@/pages/ops/evidence";
+import OpsAssessments from "@/pages/ops/assessments";
+import OpsReports from "@/pages/ops/reports";
 import { useApiKey } from "@/hooks/use-nhid";
 import { ApiError } from "@/lib/api";
 
@@ -75,6 +82,16 @@ function Router() {
             <Route path="/audit"><ProtectedRoute component={AuditPage} /></Route>
             <Route path="/billing"><ProtectedRoute component={Billing} /></Route>
             <Route path="/settings"><ProtectedRoute component={SettingsPage} /></Route>
+
+            {/* Governance operations — the monitoring and evidence product. */}
+            <Route path="/ops"><ProtectedRoute component={OpsOverview} /></Route>
+            <Route path="/ops/interactions"><ProtectedRoute component={OpsInteractions} /></Route>
+            <Route path="/ops/interactions/:id"><ProtectedRoute component={OpsInteractionDetail} /></Route>
+            <Route path="/ops/findings"><ProtectedRoute component={OpsFindings} /></Route>
+            <Route path="/ops/findings/:id"><ProtectedRoute component={OpsFindingDetail} /></Route>
+            <Route path="/ops/evidence"><ProtectedRoute component={OpsEvidence} /></Route>
+            <Route path="/ops/assessments"><ProtectedRoute component={OpsAssessments} /></Route>
+            <Route path="/ops/reports"><ProtectedRoute component={OpsReports} /></Route>
             <Route component={NotFound} />
           </Switch>
         </Layout>

@@ -90,6 +90,7 @@ from saas_layer.voice_sessions import (
     update_voice_session_in_tx,
 )
 from saas_layer import agent_authorization, agent_registry
+from saas_layer import monitoring, normalization
 from saas_layer.db import get_conn
 
 # NHID core is accessed via direct Python import (no Bridge HTTP dependency).
@@ -211,6 +212,7 @@ init_db()
 migrate_billing_columns()
 voice_policy_store.init_voice_policy_table()
 agent_registry.init_agent_registry_tables()
+monitoring.init_monitoring_tables()
 
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
@@ -592,104 +594,20 @@ async def billing_publishable_key():
     return {"publishable_key": key}
 
 
-# ── Compliance badge (public, no auth) ────────────────────────────────────────
-# Vendors embed this SVG in their documentation to signal NHID compliance.
-# Only active paid-tier orgs (L1/L2/L3) receive a badge; free/inactive return 404.
-
-_TIER_ACCENT: dict = {"l1": "#00c2a8", "l2": "#38bdf8", "l3": "#c084fc"}
-_TIER_LOGO_FG: dict = {"l1": "#042f2e", "l2": "#082f49", "l3": "#2e1065"}
-_TIER_LEVEL: dict = {"l1": "L1", "l2": "L2", "l3": "L3"}
-
-
-def _build_badge_svg(org_name: str, tier: str, org_id: str = "") -> str:
-    accent = _TIER_ACCENT.get(tier, "#00c2a8")
-    logo_fg = _TIER_LOGO_FG.get(tier, "#042f2e")
-    tier_level = _TIER_LEVEL.get(tier, tier.upper())
-    safe_name = (org_name[:26] + "…") if len(org_name) > 26 else org_name
-
-    # Unique IDs prevent conflicts when multiple badges appear on one page
-    uid = (org_id or tier or "nhid")[:8].replace("-", "")
-
-    # Layout constants
-    left_w = 74    # NHID branding section (bar + logo + label)
-    # Right section width: wide enough for "✓ L2 VERIFIED" + org name
-    right_w = max(114, len(safe_name) * 5 + 32)
-    total_w = left_w + right_w
-    tx = left_w + 10   # x-start for right-section text
-
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="30"'
-        f' role="img" aria-label="NHID Clinical {tier_level} Verified — {safe_name}">'
-        f"<title>NHID Clinical {tier_level} Verified — {safe_name}</title>"
-        "<defs>"
-        f'<linearGradient id="bg{uid}" x1="0" y1="0" x2="0" y2="1">'
-        f'<stop offset="0" stop-color="#1e293b"/>'
-        f'<stop offset="1" stop-color="#0f172a"/>'
-        "</linearGradient>"
-        f'<clipPath id="cp{uid}"><rect width="{total_w}" height="30" rx="5"/></clipPath>'
-        "</defs>"
-        # Card background + tinted right section + border
-        f'<g clip-path="url(#cp{uid})">'
-        f'<rect width="{total_w}" height="30" fill="url(#bg{uid})"/>'
-        f'<rect width="3" height="30" fill="{accent}"/>'
-        f'<rect x="{left_w}" width="{right_w}" height="30" fill="{accent}" fill-opacity="0.10"/>'
-        f'<rect width="{total_w}" height="30" rx="5" fill="none" stroke="{accent}" stroke-width="0.8" stroke-opacity="0.30"/>'
-        "</g>"
-        # N logo mark
-        f'<rect x="9" y="7" width="16" height="16" rx="3" fill="{accent}"/>'
-        f'<text x="17" y="18.5" text-anchor="middle"'
-        f' font-family="\'Arial Black\',Arial,sans-serif" font-size="10" font-weight="900" fill="{logo_fg}">N</text>'
-        # NHID / Clinical label (two lines)
-        f'<text x="30" y="13" font-family="Arial,Helvetica,sans-serif" font-size="7.5"'
-        f' font-weight="700" fill="{accent}" letter-spacing="0.8">NHID</text>'
-        f'<text x="30" y="24" font-family="Arial,Helvetica,sans-serif" font-size="7"'
-        f' fill="#475569" letter-spacing="0.3">Clinical</text>'
-        # Divider
-        f'<line x1="{left_w}" y1="6" x2="{left_w}" y2="24" stroke="{accent}" stroke-width="0.5" stroke-opacity="0.35"/>'
-        # ✓ TIER VERIFIED (top line)
-        f'<text x="{tx}" y="14" font-family="Arial,Helvetica,sans-serif" font-size="8.5"'
-        f' font-weight="700" fill="{accent}">&#x2713; {tier_level} VERIFIED</text>'
-        # Org name (bottom line)
-        f'<text x="{tx}" y="25" font-family="Arial,Helvetica,sans-serif" font-size="7.5"'
-        f' fill="#94a3b8">{safe_name}</text>'
-        "</svg>"
-    )
-
-
-@app.get("/saas/badge/{org_id}", tags=["Badge"])
-async def compliance_badge(org_id: str):
-    """
-    Return an SVG compliance badge for a paid-tier org.
-
-    Publicly accessible — no API key required. Vendors embed the URL:
-      <img src="https://<host>/saas/badge/<org_id>" alt="NHID Verified"/>
-
-    Returns 404 for free-tier or inactive orgs so badge URLs go dark
-    when a subscription lapses.
-    """
-    org = get_org(org_id)
-    if not org:
-        raise HTTPException(status_code=404, detail="Org not found.")
-
-    plan = org.get("plan", "free")
-    status = org.get("status", "active")
-
-    if plan not in _TIER_LABEL or status != "active":
-        raise HTTPException(
-            status_code=404,
-            detail="Badge not available for this org (free tier or inactive subscription).",
-        )
-
-    svg = _build_badge_svg(org["org_name"], plan, org_id)
-    return Response(
-        content=svg,
-        media_type="image/svg+xml",
-        headers={
-            "Cache-Control": "no-cache, max-age=0",
-            "X-NHID-Plan": plan,
-            "X-NHID-Org": org_id,
-        },
-    )
+# ── Compliance badge — WITHDRAWN ─────────────────────────────────────────────
+#
+# GET /saas/badge/{org_id} served a public SVG reading "NHID Verified", gated
+# on paid tier. It is removed rather than reworded.
+#
+# A badge is an assurance artifact. Issuing one tied to a subscription rather
+# than to a measurement makes this a certification body, which
+# docs/claim-boundaries.md explicitly forbids, and it did so on the strength of
+# zero deployments. Vendors embedded the URL on their own sites, so the claim
+# travelled further than anything supporting it.
+#
+# There is no replacement badge and no replacement score. What this product
+# reports instead is a governance assessment with stated denominators and
+# stated limitations: see /saas/monitor/assessments/{id}/report.
 
 
 # ── Trace: append events (subscription-gated) ─────────────────────────────────
@@ -1980,3 +1898,175 @@ async def admin_portal_org(org_id: str, _token: str = Depends(require_admin_sess
         "usage": {**usage, "rate_limit": rate},
         "recent_activity": activity,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Monitoring and evidence — the commercial product surface
+#
+# BUSINESS HYPOTHESIS / NEEDS CUSTOMER VALIDATION: the buyer (payer operations,
+# compliance or QA), the workflow and the willingness to pay for any of this are
+# unvalidated. There are zero deployments and zero pilots. Nothing below may be
+# presented to anyone as evidence of demand.
+#
+# The loop: Ingest -> Normalize -> Evaluate -> Monitor -> Investigate -> Review
+# -> Report. Every endpoint here serves one step of it.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class CreateAssessmentRequest(BaseModel):
+    name: str
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
+    is_synthetic: bool = False
+
+
+class IngestRequest(BaseModel):
+    assessment_id: str
+    vendor: str = "generic"
+    interactions: List[Dict[str, Any]]
+    is_synthetic: bool = False
+
+
+class FindingUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    resolution: Optional[str] = None
+    reviewer: Optional[str] = None
+    notes: Optional[str] = None
+    remediation: Optional[str] = None
+
+
+class TimeEntryRequest(BaseModel):
+    assessment_id: str
+    activity: str
+    minutes: float
+    finding_id: Optional[str] = None
+    reviewer: Optional[str] = None
+
+
+@app.post("/saas/monitor/assessments", tags=["Monitoring"])
+async def monitor_create_assessment(
+    body: CreateAssessmentRequest, org: Dict = Depends(subscription_gated_org)
+):
+    """Open a monitoring run. Repeated assessments are what make this a service
+    rather than a one-off report."""
+    return monitoring.create_assessment(
+        org["org_id"], body.name, body.period_start, body.period_end, body.is_synthetic
+    )
+
+
+@app.get("/saas/monitor/assessments", tags=["Monitoring"])
+async def monitor_list_assessments(org: Dict = Depends(subscription_gated_org)):
+    return {"assessments": monitoring.list_assessments(org["org_id"])}
+
+
+@app.post("/saas/monitor/ingest", tags=["Monitoring"])
+async def monitor_ingest(body: IngestRequest, org: Dict = Depends(subscription_gated_org)):
+    """Ingest interactions the customer already has.
+
+    Upload-based by design: requiring a production telephony integration before
+    a payer can see anything would defeat the only property that makes this
+    adoptable, which is that nothing in production has to change.
+    """
+    ingested, errors = [], []
+    for index, payload in enumerate(body.interactions):
+        try:
+            canonical = normalization.normalize(payload, body.vendor)
+            ingested.append(
+                monitoring.ingest_interaction(
+                    org["org_id"], body.assessment_id, canonical, body.is_synthetic
+                )
+            )
+        except normalization.NormalizationError as exc:
+            errors.append({"index": index, "error": str(exc)})
+    return {"ingested": len(ingested), "interaction_ids": ingested, "errors": errors}
+
+
+@app.post("/saas/monitor/assessments/{assessment_id}/evaluate", tags=["Monitoring"])
+async def monitor_evaluate(assessment_id: str, org: Dict = Depends(subscription_gated_org)):
+    return monitoring.evaluate_assessment(org["org_id"], assessment_id)
+
+
+@app.get("/saas/monitor/interactions", tags=["Monitoring"])
+async def monitor_interactions(
+    assessment_id: Optional[str] = None,
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    org: Dict = Depends(subscription_gated_org),
+):
+    return {"interactions": monitoring.list_interactions(
+        org["org_id"], assessment_id, search, status, limit, offset)}
+
+
+@app.get("/saas/monitor/interactions/{interaction_id}", tags=["Monitoring"])
+async def monitor_interaction_detail(
+    interaction_id: str, org: Dict = Depends(subscription_gated_org)
+):
+    detail = monitoring.get_interaction(org["org_id"], interaction_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Interaction not found")
+    return detail
+
+
+@app.get("/saas/monitor/findings", tags=["Monitoring"])
+async def monitor_findings(
+    assessment_id: Optional[str] = None,
+    status: Optional[str] = None,
+    category: Optional[str] = None,
+    org: Dict = Depends(subscription_gated_org),
+):
+    return {"findings": monitoring.list_findings(
+        org["org_id"], assessment_id, status, category)}
+
+
+@app.get("/saas/monitor/findings/{finding_id}", tags=["Monitoring"])
+async def monitor_finding_detail(finding_id: str, org: Dict = Depends(subscription_gated_org)):
+    finding = monitoring.get_finding(org["org_id"], finding_id)
+    if finding is None:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    return finding
+
+
+@app.patch("/saas/monitor/findings/{finding_id}", tags=["Monitoring"])
+async def monitor_update_finding(
+    finding_id: str, body: FindingUpdateRequest, org: Dict = Depends(subscription_gated_org)
+):
+    try:
+        return monitoring.update_finding(
+            org["org_id"], finding_id,
+            status=body.status, resolution=body.resolution, reviewer=body.reviewer,
+            notes=body.notes, remediation=body.remediation,
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/saas/monitor/time-entries", tags=["Monitoring"])
+async def monitor_record_time(
+    body: TimeEntryRequest, org: Dict = Depends(subscription_gated_org)
+):
+    """Record reviewer effort. Measurement infrastructure, not an ROI claim."""
+    entry_id = monitoring.record_time(
+        org["org_id"], body.assessment_id, body.activity, body.minutes,
+        body.finding_id, body.reviewer,
+    )
+    return {"time_entry_id": entry_id}
+
+
+@app.get("/saas/monitor/metrics", tags=["Monitoring"])
+async def monitor_metrics(
+    assessment_id: Optional[str] = None, org: Dict = Depends(subscription_gated_org)
+):
+    """Every figure carries the denominator it was computed over. No composite
+    score, no tier, no grade."""
+    return monitoring.compute_metrics(org["org_id"], assessment_id)
+
+
+@app.get("/saas/monitor/assessments/{assessment_id}/report", tags=["Monitoring"])
+async def monitor_report(assessment_id: str, org: Dict = Depends(subscription_gated_org)):
+    try:
+        return monitoring.build_report(org["org_id"], assessment_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Assessment not found")

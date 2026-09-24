@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import {
-  LayoutDashboard, Shield, Search, BarChart2,
+  LayoutDashboard,
+  ClipboardCheck, Shield, Search, BarChart2,
   X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard, ShieldCheck, Zap, Settings2,
 } from "lucide-react";
 import { useApiKey } from "@/hooks/use-nhid";
@@ -28,6 +29,7 @@ const NHIDLogoMark = ({ size = 32 }: { size?: number }) => (
 
 const NAV_ITEMS = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, desc: "Overview & metrics" },
+  { name: "Governance Ops", href: "/ops", icon: ClipboardCheck, desc: "Monitor interactions, work findings" },
   { name: "Audit Trail", href: "/audit", icon: ShieldCheck, desc: "Explore & verify sessions" },
   { name: "Submit Event", href: "/trace", icon: Shield, desc: "Ingest a new audit event" },
   { name: "Proof Lookup", href: "/proof", icon: Search, desc: "Lightweight session proof" },
