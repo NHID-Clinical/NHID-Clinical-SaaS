@@ -5,7 +5,7 @@ This directory is the **NHID-Clinical SaaS backend**, not the framework.
 It contains `saas_layer/` (the FastAPI control plane, the monitoring and
 evidence product, billing, auth and the audit chain), a vendored snapshot of the
 framework engine under `src/`, and an older copy of the framework's public site
-HTML that is kept for the hosted demo routes.
+HTML that **nothing in this repository serves**.
 
 > An earlier version of this file was a copy of the framework README. It had
 > drifted badly — it advertised a per-call Call Authorization Score, "330+
@@ -29,7 +29,7 @@ repository as a whole in [`../README.md`](../README.md).
 | `saas_layer/` | The control plane. `gateway.py` is the API; `monitoring.py` is the monitoring and evidence product; `normalization.py` maps vendor payloads to one canonical interaction shape; `audit.py` is the hash-chained, HMAC-protected, append-only audit store. |
 | `src/` | A vendored snapshot of the framework engine (`nhid_policy_engine_v1.py`, `agent_identity.py`). **It is a snapshot and it lags the framework.** In particular it still carries DBC-01's acoustic-artifact path, which the framework withdrew — see the note below. |
 | `tests/` | The backend suite, including `test_monitoring_e2e.py`, which drives upload → normalize → evaluate → finding → evidence → review → report over real HTTP. |
-| `specs/`, `traces/`, `assets/`, `*.html` | An older copy of the framework's published site, kept for the hosted demo routes. Not maintained here; the framework repository publishes the current versions. |
+| `specs/`, `traces/`, `assets/`, `*.html` | A stale snapshot of the framework's published site. **It is not served**: there is no static mount, no `FileResponse`, and no Pages workflow in this repository — `ci.yml` uses `nhid-clinical/` only as a working directory for the Python suite. Its copy still describes DBC-01 as detecting fake breathing and typing, which is why it must not be treated as documentation. The [framework repository](https://github.com/NHID-Clinical/NHID-Clinical) publishes the current pages. |
 
 ## Which controls run where
 
