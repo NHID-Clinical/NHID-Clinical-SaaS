@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { useApiKey } from "@/hooks/use-nhid";
+import { useOpsKey } from "@/hooks/use-nhid";
 import { monitorApi } from "@/lib/monitoring-api";
 import { OpsShell, AttestationPill, SyntheticNotice } from "./ops-ui";
 
@@ -15,7 +15,7 @@ const ESCALATION_LABEL: Record<string, string> = {
 };
 
 export default function OpsInteractions() {
-  const apiKey = useApiKey();
+  const apiKey = useOpsKey();
   const [search, setSearch] = useState("");
   const [assessment, setAssessment] = useState("");
 

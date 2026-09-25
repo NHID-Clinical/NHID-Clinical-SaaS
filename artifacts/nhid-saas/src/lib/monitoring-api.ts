@@ -6,6 +6,8 @@
  * validated.
  */
 
+import demoFixture from "@/pages/ops/demo-fixture.json";
+
 const BASE = "/saas-api";
 
 export type ControlResult = "pass" | "exception" | "unknown" | "not_assessable";
@@ -146,7 +148,85 @@ export interface GovernanceReport {
   synthetic_records: number;
 }
 
+/**
+ * Sentinel key that puts the Governance Ops screens into recorded-demo mode.
+ *
+ * The screens are entirely API-driven, so a build served without a reachable
+ * backend renders empty and a visitor cannot even obtain a key -- registration
+ * is itself an API call. Rather than reimplement the evaluator in TypeScript
+ * (which would give the control engine a second opinion about its own controls,
+ * free to drift), demo mode replays output the *real* Python evaluator actually
+ * produced, recorded by `nhid-clinical/scripts/build_demo_fixture.py` and kept
+ * honest by its `--check` mode in CI.
+ */
+export const DEMO_API_KEY = "__demo__";
+
+export const isDemoKey = (apiKey: string | null | undefined) =>
+  apiKey === DEMO_API_KEY;
+
+/**
+ * The recorded fixture, given the shape the screens expect.
+ *
+ * TypeScript infers the JSON's `details` map as an object with ten literal keys
+ * (`"DEMO-0001"` and friends), which cannot be indexed by a runtime string. The
+ * cast is through `unknown` because the JSON is generated from the API's own
+ * responses -- the guarantee that the shapes agree comes from
+ * `build_demo_fixture.py --check`, not from this file.
+ */
+const demo = demoFixture as unknown as {
+  assessments: Assessment[];
+  interactions: InteractionRow[];
+  findings: Finding[];
+  metrics: Metrics;
+  report: GovernanceReport;
+  details: Record<string, InteractionDetail>;
+  finding_details: Finding[];
+};
+
+/** Serve a recorded response, or throw if the demo has nothing for this path. */
+function demoResponse<T>(path: string, method: string): T {
+  if (method !== "GET") {
+    throw new Error(
+      "This is a recorded demonstration, so it is read-only. Connect an " +
+        "organization API key to ingest interactions, run an evaluation or " +
+        "resolve a finding.",
+    );
+  }
+
+  const [route] = path.split("?");
+  const byId = new Map(
+    demo.interactions.map((row) => [row.interaction_id, row.external_id]),
+  );
+
+  if (route === "/saas/monitor/assessments") return { assessments: demo.assessments } as T;
+  if (route === "/saas/monitor/interactions") return { interactions: demo.interactions } as T;
+  if (route === "/saas/monitor/findings") return { findings: demo.findings } as T;
+  if (route === "/saas/monitor/metrics") return demo.metrics as T;
+
+  const reportMatch = route.match(/^\/saas\/monitor\/assessments\/[^/]+\/report$/);
+  if (reportMatch) return demo.report as T;
+
+  const interactionMatch = route.match(/^\/saas\/monitor\/interactions\/(.+)$/);
+  if (interactionMatch) {
+    const externalId = byId.get(interactionMatch[1]);
+    const detail = externalId ? demo.details[externalId] : undefined;
+    if (detail) return detail as T;
+    throw new Error("That interaction is not part of the recorded demonstration.");
+  }
+
+  const findingMatch = route.match(/^\/saas\/monitor\/findings\/(.+)$/);
+  if (findingMatch) {
+    const found = demo.finding_details.find((f) => f.finding_id === findingMatch[1]);
+    if (found) return found as T;
+    throw new Error("That finding is not part of the recorded demonstration.");
+  }
+
+  throw new Error(`No recorded response for ${route}.`);
+}
+
 async function req<T>(path: string, init: RequestInit, apiKey: string): Promise<T> {
+  if (isDemoKey(apiKey)) return demoResponse<T>(path, init.method ?? "GET");
+
   const res = await fetch(`${BASE}${path}`, {
     ...init,
     headers: {

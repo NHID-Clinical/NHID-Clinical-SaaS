@@ -9,12 +9,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { useApiKey } from "@/hooks/use-nhid";
+import { useOpsKey } from "@/hooks/use-nhid";
 import { monitorApi, CATEGORY_LABEL } from "@/lib/monitoring-api";
 import { OpsShell, ResultPill, AttestationPill } from "./ops-ui";
 
 export default function OpsEvidence() {
-  const apiKey = useApiKey();
+  const apiKey = useOpsKey();
   const [selected, setSelected] = useState<string>("");
 
   const { data: findings } = useQuery({

@@ -8,12 +8,12 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { useApiKey } from "@/hooks/use-nhid";
+import { useOpsKey } from "@/hooks/use-nhid";
 import { monitorApi, fmtPct, CATEGORY_LABEL } from "@/lib/monitoring-api";
 import { OpsShell, Metric, SyntheticNotice } from "./ops-ui";
 
 export default function OpsOverview() {
-  const apiKey = useApiKey();
+  const apiKey = useOpsKey();
 
   const { data: metrics, isLoading } = useQuery({
     queryKey: ["ops-metrics"],

@@ -33,7 +33,7 @@ const NHIDLogo = () => (
       NHID Clinical
     </div>
     <div style={{ fontSize: 12, color: "var(--nhid-muted)", letterSpacing: "0.02em" }}>
-      Enterprise AI Audit Infrastructure
+      Governance monitoring and evidence for healthcare voice AI
     </div>
   </div>
 );
@@ -475,7 +475,10 @@ export default function Onboarding() {
         )}
 
         <div style={{ textAlign: "center", marginTop: 20, fontSize: 11, color: "var(--nhid-muted)", opacity: 0.6 }}>
-          NHID Clinical · HIPAA-aligned audit infrastructure · v2.0
+          {/* Not "HIPAA-aligned": nothing here has been assessed against the
+              Security Rule, and the framework's own position is "mapped, not
+              certified". The strapline states what the product does. */}
+          NHID Clinical · Healthcare voice-AI governance monitoring and evidence
         </div>
       </div>
     </div>
