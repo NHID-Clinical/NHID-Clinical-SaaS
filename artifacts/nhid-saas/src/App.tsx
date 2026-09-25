@@ -83,15 +83,30 @@ function Router() {
             <Route path="/billing"><ProtectedRoute component={Billing} /></Route>
             <Route path="/settings"><ProtectedRoute component={SettingsPage} /></Route>
 
-            {/* Governance operations — the monitoring and evidence product. */}
-            <Route path="/ops"><ProtectedRoute component={OpsOverview} /></Route>
-            <Route path="/ops/interactions"><ProtectedRoute component={OpsInteractions} /></Route>
-            <Route path="/ops/interactions/:id"><ProtectedRoute component={OpsInteractionDetail} /></Route>
-            <Route path="/ops/findings"><ProtectedRoute component={OpsFindings} /></Route>
-            <Route path="/ops/findings/:id"><ProtectedRoute component={OpsFindingDetail} /></Route>
-            <Route path="/ops/evidence"><ProtectedRoute component={OpsEvidence} /></Route>
-            <Route path="/ops/assessments"><ProtectedRoute component={OpsAssessments} /></Route>
-            <Route path="/ops/reports"><ProtectedRoute component={OpsReports} /></Route>
+            {/* Governance operations — the monitoring and evidence product.
+                Deliberately not wrapped in ProtectedRoute, unlike every route
+                above. These screens call useOpsKey(), which falls back to the
+                recorded-demo sentinel when no organization key is held, and the
+                client then serves committed synthetic output instead of calling
+                the API. Redirecting a visitor with no key would send them to a
+                registration form that cannot work without a backend, which is
+                exactly the state the published build is in.
+
+                This is not the authorization boundary and never was. The
+                gateway authorizes every request on X-API-Key; ProtectedRoute is
+                a client-side redirect, and with no key these screens can reach
+                no server data at all -- only the fixture compiled into the
+                bundle. The routes above keep the redirect because they have no
+                recorded equivalent: billing, usage, settings and admin must
+                never fall back to a demonstration. */}
+            <Route path="/ops" component={OpsOverview} />
+            <Route path="/ops/interactions" component={OpsInteractions} />
+            <Route path="/ops/interactions/:id" component={OpsInteractionDetail} />
+            <Route path="/ops/findings" component={OpsFindings} />
+            <Route path="/ops/findings/:id" component={OpsFindingDetail} />
+            <Route path="/ops/evidence" component={OpsEvidence} />
+            <Route path="/ops/assessments" component={OpsAssessments} />
+            <Route path="/ops/reports" component={OpsReports} />
             <Route component={NotFound} />
           </Switch>
         </Layout>

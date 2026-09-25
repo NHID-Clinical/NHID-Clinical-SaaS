@@ -53,7 +53,16 @@ function StatusDot({ status }: { status: "up" | "down" | "unknown" }) {
   );
 }
 
-function useHealthStatus() {
+/**
+ * Probe the gateway, but only where there is a gateway to probe.
+ *
+ * `enabled` is false in the recorded demonstration, where no backend is
+ * configured at all. Probing there would fail and the panel would report
+ * "DOWN" in red for services that are not down -- they are absent by design.
+ * Claiming an outage nobody observed is the same error this product exists to
+ * catch in a governance record, so the panel says "—" (unknown) instead.
+ */
+function useHealthStatus(enabled: boolean) {
   const [status, setStatus] = useState<{
     nhid: "up" | "down" | "unknown";
     saas: "up" | "down" | "unknown";
@@ -61,6 +70,10 @@ function useHealthStatus() {
   }>({ nhid: "unknown", saas: "unknown", stripe: "unknown" });
 
   useEffect(() => {
+    if (!enabled) {
+      setStatus({ nhid: "unknown", saas: "unknown", stripe: "unknown" });
+      return;
+    }
     const check = async () => {
       try {
         const res = await fetch("/saas-api/health");
@@ -78,7 +91,7 @@ function useHealthStatus() {
     check();
     const interval = setInterval(check, 60_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [enabled]);
 
   return status;
 }
@@ -114,7 +127,7 @@ function SidebarContent({
   apiKey: string | null;
   onClose?: () => void;
 }) {
-  const health = useHealthStatus();
+  const health = useHealthStatus(!!apiKey);
   const orgName = useOrgName();
 
   const STATUS_ITEMS = [
@@ -385,7 +398,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const apiKey = useApiKey();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  if (!apiKey) return <>{children}</>;
+  // The chrome normally appears only once a visitor has a key, because every
+  // screen behind it needed one. The Ops screens no longer do: with no key they
+  // render a recorded demonstration, and without the sidebar they would arrive
+  // with no navigation between them and no way back. SidebarContent already
+  // handles a null key -- it simply omits the key and organization panels.
+  const inOps = location === "/ops" || location.startsWith("/ops/");
+  if (!apiKey && !inOps) return <>{children}</>;
 
   return (
     <div
