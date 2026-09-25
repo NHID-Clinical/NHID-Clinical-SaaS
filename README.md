@@ -78,6 +78,14 @@ All demonstration records are flagged `is_synthetic` in the database, in the UI
 and in the report. They are not customer data, not observed traffic and not a
 pilot.
 
+The dashboard is published to GitHub Pages by `.github/workflows/pages.yml`.
+What it shows is a **recorded demonstration**: with no backend reachable, the
+Governance Ops screens replay output the real evaluator produced over ten
+authored interactions, and every screen says so. Publishing that page is not a
+deployment in the sense the notice above disclaims — there is still no
+organization running this against traffic of its own. See
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
 ## Related repositories
 
 | Repository | What it is |
@@ -164,7 +172,7 @@ HIPAA-compliant.**
 
 | Document | Contents |
 |---|---|
-| `docs/DEPLOYMENT.md` | Deployment topology, the Vercel root-directory problem, the unfilled backend domain |
+| `docs/DEPLOYMENT.md` | How the dashboard is published to GitHub Pages, why the published build shows a recorded demonstration, and why it cannot show live data |
 | `docs/CONSOLIDATION_CANDIDATES.md` | Packages proposed for retirement — **nothing deleted yet** |
 | `docs/POLICY_ENGINE_RECONCILIATION.md` | The Python and TypeScript control implementations compared |
 | `docs/MONITORING_PRODUCT.md` | **The commercial product**: the loop, the four result states, the ASR dependency, the free-vs-commercial boundary, local setup, the demo path |

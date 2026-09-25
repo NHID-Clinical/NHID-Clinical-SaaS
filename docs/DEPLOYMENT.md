@@ -1,136 +1,83 @@
 # Deployment
 
-Current state of deployment configuration, what is wrong with it, and what can
-only be fixed outside this repository.
+How the dashboard is published, what it can and cannot show, and what the
+backend needs if it is ever deployed.
 
-## Intended topology
+## The dashboard is published to GitHub Pages
+
+`.github/workflows/pages.yml` builds `artifacts/nhid-saas` and publishes
+`dist/public`. That is the deployment path. **Vercel is not used**, and the
+`vercel.json` that used to sit in `artifacts/nhid-saas` has been removed rather
+than left behind as configuration for a provider this project does not deploy
+to.
 
 ```
 Browser
    │
-   │  GET /            → static assets
-   │  /saas-api/*      → rewritten by Vercel
+   │  GET /NHID-Clinical-SaaS/...  → static assets from GitHub Pages
    ▼
-Vercel  (root: artifacts/nhid-saas, output: dist)
+GitHub Pages  (artifacts/nhid-saas/dist/public)
    │
-   │  rewrite /saas-api/:path*  →  https://<backend-domain>/saas-api/:path*
-   │  (the /saas-api prefix is PRESERVED across the rewrite)
-   ▼
-Python SaaS gateway   (Docker: uvicorn saas_main:app, $PORT, default 8010)
-   │
-   │  _strip_path_prefix middleware removes /saas-api
-   ▼
-FastAPI routes: /saas/..., /admin/...
+   └── no server, no rewrite layer, no backend
 ```
 
-The frontend always calls relative paths (`src/lib/api.ts`: `const BASE =
-"/saas-api"`). It has no hardcoded backend host, which is correct — the host is
-resolved entirely by the Vercel rewrite.
+Two details in the workflow are load-bearing:
 
-The gateway accepts both prefixed and unprefixed paths, so the same routes serve
-the React frontend (`/saas-api/saas/...`) and direct callers such as Stripe
-webhooks (`/saas/billing/webhook`).
+**`BASE_PATH`.** `vite.config.ts` requires it and uses it as `base`; `App.tsx`
+feeds the same value to wouter through `import.meta.env.BASE_URL`. The workflow
+sets it to `/<repository name>/`, which is the project-page subpath. Build at
+`/` instead and every asset 404s, the server returns `index.html` in their
+place, and the browser refuses it for the wrong MIME type — the classic blank
+deploy.
 
-## Two problems, neither fixable from this repository alone
+**`404.html`.** Pages serves static files and has no rewrite rule, so a deep
+link such as `/ops/findings` would 404 on reload. The workflow copies
+`index.html` to `404.html`, which hands routing back to wouter.
 
-### 1. The Vercel Root Directory points at the wrong package
+## What the published page shows, and why
 
-Confirmed from the Vercel status payload on PR #8:
+The Governance Ops screens are entirely API-driven. With no backend reachable
+they would render empty tables, and a visitor could not even obtain a key,
+because registration is itself an API call.
 
-```json
-"rootDirectory": "artifacts/api-server"
-```
+So the published build shows a **recorded demonstration**:
+`nhid-clinical/scripts/build_demo_fixture.py` drives the real FastAPI app and
+the real `saas_layer/monitoring.py` evaluator over the committed demo
+interactions and records the responses verbatim into
+`artifacts/nhid-saas/src/pages/ops/demo-fixture.json`. The frontend replays
+that recording when it holds no organization key, and every Ops screen says so.
 
-`artifacts/api-server` is a deprecated authentication scaffold. It has no
-`index.html`, no `vercel.json`, and its build emits a Node server bundle
-(`platform: "node"`, `format: "esm"`) rather than static output. The only
-`vercel.json` in the repository lives in `artifacts/nhid-saas` and is therefore
-**never read**.
+`build_demo_fixture.py --check` fails the moment the recording and the engine
+disagree, so the published figures cannot drift away from what the evaluator
+actually produces.
 
-**Required change — Vercel dashboard, not a commit:**
+This is a recording, not a reimplementation. The alternative — a second control
+engine written in TypeScript — is how an engine acquires a second opinion about
+its own controls and then drifts from it.
 
-> Project `nhid-clinical-saas` → Settings → General → Root Directory
-> `artifacts/api-server` → `artifacts/nhid-saas`
+## The published page cannot show live data
 
-Once set, `artifacts/nhid-saas/vercel.json` takes effect and its `buildCommand`
-and `outputDirectory` apply.
+This is a consequence of dropping the rewrite layer, and it is worth stating
+plainly rather than discovering later.
 
-**Verified locally** (so the repository side is known good):
+The frontend calls relative paths. `src/lib/api.ts` and
+`src/lib/monitoring-api.ts` each declare `const BASE = "/saas-api"`, and about
+eight further call sites (`src/components/layout.tsx`, `src/pages/settings.tsx`,
+`src/pages/onboarding.tsx`, `src/pages/pricing.tsx`, `src/pages/billing.tsx`)
+fetch `/saas-api/...` directly. Under a platform with rewrites, that prefix was
+resolved to a backend host by configuration. GitHub Pages has no such layer, so
+those requests resolve against the Pages origin and cannot reach a gateway.
 
-```
-PORT=3000 BASE_PATH=/ pnpm -C artifacts/nhid-saas run build   → exit 0
-pnpm -C artifacts/nhid-saas run typecheck                     → exit 0
-```
-
-`PORT` and `BASE_PATH` are required by `vite.config.ts`; the build fails without
-them. They are already correct in `vercel.json`'s `buildCommand`.
-
-**Ordering constraint:** `artifacts/api-server` must not be removed until the
-Root Directory has been repointed. Removing it first breaks the deployment
-outright, because Vercel would be building a directory that no longer exists.
-
-### 2. `outputDirectory` did not match the build output — **fixed in this branch**
-
-`vercel.json` declared:
-
-```json
-"outputDirectory": "dist"
-```
-
-but `vite.config.ts:58` builds to `dist/public`:
-
-```js
-outDir: path.resolve(import.meta.dirname, "dist/public"),
-```
-
-Vercel would have served `dist/`, which contains only a `public/` directory and
-no `index.html` at its root — a 404 on every route, even after the Root
-Directory was corrected.
-
-Confirmed from the CI build log:
-
-```
-dist/public/index.html                 1.48 kB
-dist/public/assets/index-MQYysBTh.css  97.41 kB
-dist/public/assets/index-B3TPic7N.js   1,045.73 kB
-```
-
-`outputDirectory` is now `dist/public`. `dist/public` is the established
-convention across the repository — `artifacts/nhid-clinical-operations/vite.config.ts`
-uses it, and `artifacts/nhid-saas/.replit-artifact/artifact.toml` declares
-`publicDir = "artifacts/nhid-saas/dist/public"` — so the config was corrected to
-match the build rather than the build changed to match the config, which would
-have broken the Replit descriptor.
-
-This change is safe to make now precisely because `vercel.json` is not currently
-read: the Root Directory points elsewhere. It cannot break the present
-deployment, and it removes a failure that would otherwise appear only after
-problem 1 was fixed.
-
-### 3. The backend domain is an unfilled placeholder
-
-`artifacts/nhid-saas/vercel.json` contains:
-
-```json
-"destination": "https://REPLACE_WITH_RAILWAY_BACKEND_DOMAIN/saas-api/:path*"
-```
-
-`REPLACE_WITH_RAILWAY_BACKEND_DOMAIN` is meant to be the public domain of the
-Python gateway deployed from `nhid-clinical/Dockerfile` — on Railway, per the
-name, though nothing in the repository pins it to that provider.
-
-**No value has been invented here.** The correct domain depends on
-infrastructure that this repository cannot observe. Until it is set, every
-`/saas-api/*` request from the deployed frontend fails, so the frontend would
-deploy but not function.
-
-Note that `vercel.json` rewrites do not interpolate environment variables, so
-this cannot be parameterised in-file. It must be either edited at deploy time or
-configured as a rewrite in the Vercel dashboard.
+Serving live data from the Pages build would therefore require an **absolute
+API base fixed at build time** — a single configurable origin threaded through
+those call sites — not a rewrite. That change has not been made, because no
+backend is deployed for it to point at. Until one is, the published dashboard
+is the recorded demonstration and nothing else.
 
 ## Backend configuration
 
-The gateway refuses to start without these (see README):
+If the gateway (`nhid-clinical/Dockerfile`, `uvicorn saas_main:app`, `$PORT`,
+default 8010) is deployed, it refuses to start without these:
 
 | Variable | Purpose |
 |---|---|
@@ -139,20 +86,28 @@ The gateway refuses to start without these (see README):
 | `ADMIN_PASS_HASH` *(preferred)* or `ADMIN_PASS` | Admin credential — no default |
 | `STRIPE_WEBHOOK_SECRET` | Required to process Stripe webhooks; absent, they are rejected |
 
-`PORT` is supplied by the platform; the Dockerfile defaults to 8010.
+The gateway's `_strip_path_prefix` middleware accepts both prefixed and
+unprefixed paths, so the same routes serve a frontend calling
+`/saas-api/saas/...` and direct callers such as Stripe webhooks calling
+`/saas/billing/webhook`.
 
-## Pre-deployment checklist
+## Checklist
 
-- [ ] Vercel Root Directory set to `artifacts/nhid-saas`
-- [x] `outputDirectory` matches the build output (`dist/public`) — fixed in this branch
-- [ ] `REPLACE_WITH_RAILWAY_BACKEND_DOMAIN` replaced with the real gateway domain
-- [ ] Backend deployed and reachable at that domain
-- [ ] `/saas-api/health` returns 200 through the Vercel rewrite
-- [ ] All four required backend variables set
+For the published dashboard:
+
+- [x] Pages workflow builds `artifacts/nhid-saas` with the project-page `BASE_PATH`
+- [x] `404.html` fallback so deep links survive a reload
+- [x] Recorded fixture regenerated from the real evaluator and guarded by `--check`
+- [x] Every Ops screen states that the figures are synthetic and recorded
+- [ ] Pages enabled with **GitHub Actions** as the source in repository settings
+
+If a backend is ever deployed:
+
+- [ ] All four required variables set
 - [ ] `ADMIN_PASS_HASH` used rather than plaintext `ADMIN_PASS`
+- [ ] An absolute API base threaded through the frontend's call sites
 - [ ] Webhook registrations migrated to the `X-NHID-API-Key` header
-- [ ] Confirmed the deployment is not represented as production-ready or
-      HIPAA-compliant
+- [ ] Confirmed the deployment is not represented as production-ready, HIPAA-compliant or clinically validated
 
 ## Other deployment artifacts present
 
@@ -162,5 +117,11 @@ The gateway refuses to start without these (see README):
 | `nhid-clinical/start_{saas,nhid,frontend}.sh` | Local start scripts |
 | `artifacts/*/.replit-artifact/artifact.toml` | Replit artifact descriptors |
 
-These are untouched. The Replit descriptors are relevant to the separate Replit
-workspace noted in `docs/CONSOLIDATION_CANDIDATES.md`.
+These are untouched.
+
+One constraint has now lifted: `artifacts/api-server`, a deprecated
+authentication scaffold, previously could not be removed before a provider
+setting was repointed away from it. Nothing deploys from it any more, so that
+ordering constraint is gone and its retirement is an ordinary consolidation
+decision — see `docs/CONSOLIDATION_CANDIDATES.md`, where nothing has been
+deleted yet.

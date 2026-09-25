@@ -106,8 +106,9 @@ jobs:
         run: pnpm -C artifacts/nhid-clinical-operations run test
 
       - name: Build customer frontend
-        # PORT and BASE_PATH are required by vite.config.ts; these mirror the
-        # buildCommand in artifacts/nhid-saas/vercel.json.
+        # PORT and BASE_PATH are required by vite.config.ts. BASE_PATH is "/"
+        # here because this step only checks that the app compiles; the
+        # published build sets the project-page subpath in pages.yml.
         env:
           PORT: "3000"
           BASE_PATH: /

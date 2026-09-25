@@ -2,12 +2,9 @@ name: Pages
 
 # Publishes the Governance Ops dashboard to GitHub Pages.
 #
-# Why this exists alongside the Vercel config: the Vercel project's Root
-# Directory points at artifacts/api-server, a deprecated scaffold with no
-# index.html, so artifacts/nhid-saas/vercel.json is never read and the wrong
-# thing is built. Correcting that is a dashboard setting nobody can make from
-# this repository (docs/DEPLOYMENT.md §1). This workflow needs no such access,
-# so the dashboard can be published without waiting on it.
+# This is the deployment path. The project does not deploy to Vercel, and the
+# vercel.json that used to sit in artifacts/nhid-saas has been removed rather
+# than kept as configuration for a provider nothing publishes through.
 #
 # What gets published is the recorded demonstration: with no backend reachable
 # from Pages, the Ops screens replay output the real evaluator produced
