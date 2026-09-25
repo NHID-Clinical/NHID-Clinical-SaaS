@@ -106,7 +106,6 @@ def get_prices() -> list:
 def create_checkout_session(
     org_id: str,
     org_name: str,
-    api_key: str,
     plan: str,
     success_url: str,
     cancel_url: str,
@@ -138,7 +137,10 @@ def create_checkout_session(
     else:
         customer = client.v1.customers.create({
             "name": org_name,
-            "metadata": {"nhid_org_id": org_id, "nhid_api_key": api_key},
+            # nhid_api_key was written here and never read back -- every
+            # webhook handler reconciles on nhid_org_id. Shipping a live
+            # credential into a third party's metadata store for nothing.
+            "metadata": {"nhid_org_id": org_id},
         })
         customer_id = customer.id
         _update_org_stripe(org_id, stripe_customer_id=customer_id)
