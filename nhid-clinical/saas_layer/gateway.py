@@ -51,7 +51,7 @@ from pydantic import BaseModel
 from typing import Optional, Any, Dict, List
 
 from saas_layer.auth import (
-    init_db, create_org, validate_api_key, get_org,
+    init_db, create_org, validate_api_key, get_org, rotate_api_key,
     list_orgs, increment_usage,
     create_admin_session, validate_admin_session,
     delete_admin_session, purge_expired_admin_sessions,
@@ -437,10 +437,14 @@ async def get_org_for_user(replit_user_id: str):
     org = get_org_by_user(uid)
     if not org:
         raise HTTPException(status_code=404, detail="No org found for this user.")
+    # The key is not returned here. It is hashed at rest, so there is nothing
+    # to return -- only the non-secret prefix, enough to identify which key the
+    # org holds. A caller who has lost the key rotates it; see
+    # POST /saas/orgs/rotate-key.
     return {
         "org_id": org["org_id"],
         "org_name": org["org_name"],
-        "api_key": org["api_key"],
+        "api_key_prefix": org.get("api_key_prefix"),
         "plan": org["plan"],
         "status": org.get("status", "active"),
     }
@@ -465,6 +469,34 @@ async def get_my_org(org: Dict = Depends(get_current_org)):
         "usage_count": org["usage_count"],
         "rate_limit": rate,
         "upgrade": upgrade,
+    }
+
+
+@app.post("/saas/orgs/rotate-key")
+async def rotate_my_key(org: Dict = Depends(get_current_org)):
+    """Issue a new API key for the calling org and invalidate the old one.
+
+    This endpoint exists because keys are hashed at rest: a lost key cannot be
+    looked up and re-shown, so without rotation losing a key would mean losing
+    the account. The plaintext is returned exactly once, here, and is
+    unrecoverable afterwards -- the response says so, because a caller who
+    does not store it has to rotate again.
+
+    Authenticated with the key being replaced, so only the current holder can
+    do it.
+    """
+    new_key = rotate_api_key(org["org_id"])
+    if not new_key:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+    log_request(org["org_id"], "/saas/orgs/rotate-key", "POST", 200, None)
+    return {
+        "org_id": org["org_id"],
+        "api_key": new_key,
+        "note": (
+            "Store this now. It is hashed on the server and cannot be shown "
+            "again. The previous key stopped working when this response was "
+            "generated."
+        ),
     }
 
 
@@ -502,7 +534,6 @@ async def billing_checkout(body: CheckoutRequest, org: Dict = Depends(get_curren
         url = create_checkout_session(
             org_id=org["org_id"],
             org_name=org["org_name"],
-            api_key=org["api_key"],
             plan=body.plan,
             success_url=body.success_url,
             cancel_url=body.cancel_url,

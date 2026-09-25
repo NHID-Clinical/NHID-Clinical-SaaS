@@ -101,7 +101,11 @@ Implemented areas include:
   capture, metrics and reporting (`saas_layer/monitoring.py`,
   `saas_layer/normalization.py`, the `/saas/monitor/*` endpoints, and the
   Governance Ops screens in `artifacts/nhid-saas`)
-- organization and API-key management
+- organization and API-key management, with keys **hashed at rest**
+  (`saas_layer/api_keys.py`): the database stores a SHA-256 of the key and a
+  short non-secret prefix, never the key, so a dump or a logged row yields
+  nothing replayable. A lost key is replaced via `POST /saas/orgs/rotate-key`
+  rather than re-read
 - Stripe billing integration
 - voice webhook ingestion (Retell, Vapi, Twilio, generic)
 - transcript disclosure-policy evaluation
@@ -126,8 +130,11 @@ Before commercial deployment, the project requires:
 - credential hardening
 - CI enforcement
 - backend and frontend consolidation
-- webhook signature verification
-- API-key hashing at rest
+- webhook **signature** verification — provider-signed payloads from Vapi,
+  Retell and Twilio are not yet verified. (API-key *authentication* on those
+  endpoints is done: `saas_layer/webhook_auth.py` requires the
+  `X-NHID-API-Key` header and only tolerates `?api_key=` for existing
+  registrations, with a deprecation warning.)
 - tenant-isolation testing
 - NPPES validation of registered NPIs (format is checked; the number is not
   looked up)
