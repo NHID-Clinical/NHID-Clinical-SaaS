@@ -1,83 +1,73 @@
-# NHID-Clinical
+# `nhid-clinical/` — the SaaS backend
 
-**A voluntary behavioral baseline + cryptographic authorization layer for transparent AI voice agents in B2B healthcare payer–provider calls.**
+This directory is the **NHID-Clinical SaaS backend**, not the framework.
 
-Not a standard. Not a certification. Not a product. An open, testable reference.
+It contains `saas_layer/` (the FastAPI control plane, the monitoring and
+evidence product, billing, auth and the audit chain), a vendored snapshot of the
+framework engine under `src/`, and an older copy of the framework's public site
+HTML that is kept for the hosted demo routes.
 
-Built from real payer operations experience enforcing HIPAA on live calls. The core problem: AI agents were authenticating and pulling member data **before** disclosing they were non-human. That window is **Impersonation Latency**.
+> An earlier version of this file was a copy of the framework README. It had
+> drifted badly — it advertised a per-call Call Authorization Score, "330+
+> tests", and a DBC-01 that detected breathing and typing cues. None of that is
+> true of either repository now. Duplicating the framework's documentation here
+> is what let it drift, so this file no longer does.
 
-NHID-Clinical v1.3 gives you five concrete, testable controls and a per-call Call Authorization Score (CAS). NHID-Auth v2 adds Ed25519 agent passports, NPI binding, scoped delegation, and revocation.
+**The framework repository is the source of truth for the controls:**
+[github.com/NHID-Clinical/NHID-Clinical](https://github.com/NHID-Clinical/NHID-Clinical).
+Read the control definitions, the terminology, the claim boundaries and the
+evidence limitations there.
 
-**Strongest next step for most organizations:** Run a focused Tier 0 shadow pilot on your own traffic. The [Tier 0 Shadow Pilot Kit](docs/pilot-kit/README.md) makes this a 2–4 week exercise.
+**The product** is described in
+[`../docs/MONITORING_PRODUCT.md`](../docs/MONITORING_PRODUCT.md), and the
+repository as a whole in [`../README.md`](../README.md).
 
-## The Four Core Controls (v1.3)
+## What is here
 
-| Control | Requirement |
-|---------|-------------|
-| **IDG-01** | Disclose non-human identity before any PHI exchange |
-| **PDX-01** | No protected data until identity is confirmed |
-| **DBC-01** | No deceptive human mimicry (breathing, typing, hesitation cues) |
-| **EIT-01** | Clear, honored human escalation path on request |
+| Path | What it is |
+|---|---|
+| `saas_layer/` | The control plane. `gateway.py` is the API; `monitoring.py` is the monitoring and evidence product; `normalization.py` maps vendor payloads to one canonical interaction shape; `audit.py` is the hash-chained, HMAC-protected, append-only audit store. |
+| `src/` | A vendored snapshot of the framework engine (`nhid_policy_engine_v1.py`, `agent_identity.py`). **It is a snapshot and it lags the framework.** In particular it still carries DBC-01's acoustic-artifact path, which the framework withdrew — see the note below. |
+| `tests/` | The backend suite, including `test_monitoring_e2e.py`, which drives upload → normalize → evaluate → finding → evidence → review → report over real HTTP. |
+| `specs/`, `traces/`, `assets/`, `*.html` | An older copy of the framework's published site, kept for the hosted demo routes. Not maintained here; the framework repository publishes the current versions. |
 
-Plus **ATR-01** (Audit Trail) — every session produces a machine-readable, tamper-evident trace.
+## Which controls run where
 
-18-case Conformance Test Suite. **330+ Python tests passing.**
+The **monitoring product** (`saas_layer/monitoring.py`) evaluates four controls —
+**IDG-01, PDX-01, EIT-01, ATR-01** — and returns one of four results for each:
+`pass`, `exception`, `unknown`, `not_assessable`.
 
-[Try the Governance Simulator →](https://nhid-clinical.org/simulator.html)
+**DBC-01 is not part of the monitoring product.** It is evaluated only by the
+older real-time voice-webhook path (`saas_layer/voice_policy.py`), whose
+`check_deceptive_artifacts` reads an `audio_artifacts` list supplied in the
+webhook payload and looks for annotated transcript markers such as
+`[breathing]`.
 
-## Five-Layer Trust Stack
+> **Known divergence from the framework.** The framework **withdrew** DBC-01's
+> acoustic-artifact tier: it read a `deceptive_artifact_flags` field out of the
+> event payload, which means it was self-reported by the agent under
+> evaluation, and keeping it implied an acoustic analysis NHID-Clinical has
+> never performed. The framework's DBC-01 now evaluates the agent's own
+> identity assertion text for claims of human or licensed-professional status.
+> The webhook path here has **not** been changed to match, and the vendored
+> `src/nhid_policy_engine_v1.py` snapshot still contains the withdrawn tier.
+> Whether to retire the webhook artifact check is an open product decision,
+> recorded here rather than silently resolved.
 
-| Layer | Component | Role |
-|-------|-----------|------|
-| 0 | NPI Gap | The original problem |
-| 1 | STIR/SHAKEN | Carrier number authentication |
-| **2** | **NHID-Clinical v1.3** | Behavioral disclosure baseline |
-| 3 | NHID-Auth v2 | Cryptographic delegated authority |
-| 4 | FHIR AuditEvent R4 | Healthcare-native audit logging |
-| 5 | OpenTelemetry | Enterprise observability |
+## Running it
 
-![Five-Layer Trust Stack](assets/images/3d-svg/trust-stack.svg)
+See [`../README.md`](../README.md) for the test commands, the required
+configuration and the local setup, and
+[`../docs/MONITORING_PRODUCT.md`](../docs/MONITORING_PRODUCT.md) for the demo
+path. Both need a live PostgreSQL: `gateway.py` reads `DATABASE_URL` at import
+time, so the suite cannot even collect without one.
 
-*Illustrative 3D visualization of the five-layer trust stack — conceptual render for clarity. Open voluntary proposal · not a product, not a certification.*
+## Status
 
-## Quick Start
-
-```bash
-git clone https://github.com/nhid-clinical/nhid-clinical.git
-cd nhid-clinical
-pip install -r requirements.txt
-python -m pytest tests/ -v
-```
-
-Expected: **330+ passing.**
-
-## Live API (no key required for demo routes)
-
-```bash
-curl -s -X POST https://gfvq4swdtf.execute-api.us-east-1.amazonaws.com/prod/v1/adapters/vapi/check \
-  -H "Content-Type: application/json" \
-  -d @tests/demo_scenarios/vapi_noncompliant.json | python -m json.tool
-```
-
-Full endpoint list and integration guides on [nhid-clinical.org](https://nhid-clinical.org/).
-
-## Repo structure
-
-```
-schema/     Canonical event schema (JSON Schema Draft 2020-12)
-src/        Policy engine + cryptographic identity layer (pure Python)
-tests/      Conformance suite (YAML) + failure harness (pytest) + trace generator
-adapters/   Vendor format adapters (Twilio, Vapi, Retell, Amazon Connect → NHID trace)
-traces/     Pre-generated failure traces
-assets/     Brand system, control icons, and 3D/glass diagram set (SVG + PNG)
-```
-
-## Contributing & Pilot Partners
-
-We're looking for the first shadow evaluation partners (observe-only, 90 days). Start with the Tier 0 kit — it produces usable impersonation latency + CAS data from your existing logs in 2–4 weeks.
-
-[For Payers](https://nhid-clinical.org/for-payers.html) · [Community](https://nhid-clinical.org/community.html) · [GitHub Discussions](https://github.com/nhid-clinical/nhid-clinical/discussions)
+Zero deployments, zero pilots, zero validated willingness-to-pay. This
+repository must not be represented as production-ready or HIPAA-compliant.
 
 ---
 
-**CC BY 4.0** · Brianna Baynard · NIST-2025-0035-0026 · [nhid-clinical.org](https://nhid-clinical.org/)
+**CC BY 4.0** (specification) · **Apache-2.0** (code) · Brianna Baynard ·
+[nhid-clinical.org](https://nhid-clinical.org/)

@@ -1,11 +1,106 @@
 # NHID-Clinical SaaS
 
+**A healthcare voice-AI governance monitoring and evidence platform.**
+
+It monitors healthcare voice-AI interactions an organization *already receives*
+against the [NHID-Clinical](https://github.com/NHID-Clinical/NHID-Clinical)
+controls, and gives it the evidence and workflow to investigate what happened.
+Nothing in production changes, no provider has to issue a credential, and no
+vendor has to integrate.
+
+> **BUSINESS HYPOTHESIS — NEEDS CUSTOMER VALIDATION.**
+> There are **zero deployments, zero pilots and zero validated
+> willingness-to-pay**. The buyer, the workflow and the pricing are hypotheses.
+> Nothing in this repository, the application or its UI may be presented to
+> anyone as evidence of demand.
+
+## The loop
+
+```
+Ingest → Normalize → Evaluate → Monitor → Investigate → Review → Report
+```
+
+| Step | Where |
+|---|---|
+| Ingest | `POST /saas/monitor/ingest` — transcripts or event exports |
+| Normalize | `saas_layer/normalization.py` — one canonical shape; `generic`, `twilio`, `vapi` |
+| Evaluate | `saas_layer/monitoring.py` — **IDG-01, PDX-01, EIT-01, ATR-01** |
+| Monitor | `GET /saas/monitor/metrics`, the Overview screen |
+| Investigate | Interaction detail: transcript, per-control result, the reason for each |
+| Review | Findings queue: open → under review → resolved |
+| Report | `GET /saas/monitor/assessments/{id}/report` |
+
+A control returns one of four results: `pass`, `exception`, `unknown` or
+`not_assessable`. `unknown` exists because forcing a binary verdict onto an
+interaction that cannot support one is how a governance record becomes fiction —
+if a human asks for a person and the recording ends, completion was neither
+observed nor refused. See [`docs/MONITORING_PRODUCT.md`](docs/MONITORING_PRODUCT.md)
+for the full product description, the free-vs-commercial boundary, local setup
+and the demo path.
+
+**DBC-01 is not part of the monitoring product.** It is evaluated by the older
+real-time voice-webhook path (`saas_layer/voice_policy.py`), not by
+`monitoring.py`.
+
+## Evidence and limitations
+
+The same limits that bound the framework bound this product, because it runs the
+framework's controls over the same kind of evidence.
+
+- **It evaluates transcript and event evidence.** A disclosure that was spoken
+  but mis-transcribed reads as a missing disclosure. An escalation request that
+  was mis-transcribed produces **no finding at all**, and the record then
+  attests to a compliant interaction — the one failure mode the evidence cannot
+  reveal on its own.
+- **Transcription accuracy is not established here.** The product performs no
+  speech recognition and does not independently establish ASR accuracy. Every
+  interaction carries an attestation of `measured`, `attested` or `unattested`,
+  and an unattested one raises a finding rather than being quietly treated as
+  fine. Assuring transcription quality, including across speaker groups, is the
+  deploying organization's job.
+- **Population-level fairness stratification is not implemented.** `language`
+  and `interpreter_present` are recorded so an organization can run its own
+  reporting; nothing here stratifies.
+- **No score.** No composite, no tier, no grade. The former Call Authorization
+  Score, its "Verified Trust" / "Conditional Trust" tiers and its badges are
+  withdrawn, and nothing reintroduces them under another name.
+- **Not a certification**, not a compliance badge, not a clinical safety
+  validation system, and not a universal measure of AI safety. Findings are
+  *governance exceptions*, not regulatory violations. Standards work is
+  **mapped, not certified**.
+- **Impersonation Latency** measures the elapsed time between interaction start
+  and the point at which a non-human actor discloses its non-human identity to
+  the human recipient. It measures disclosure timing. It does *not* determine
+  that impersonation occurred, determine intent, detect an impersonator, prevent
+  impersonation, establish authentication, or establish authorization.
+
+All demonstration records are flagged `is_synthetic` in the database, in the UI
+and in the report. They are not customer data, not observed traffic and not a
+pilot.
+
+## Related repositories
+
+| Repository | What it is |
+|---|---|
+| **[NHID-Clinical](https://github.com/NHID-Clinical/NHID-Clinical)** | The open framework: controls, the deterministic engine, the conformance suite, the event schema, the shadow-evaluation method. Free, and the governance verdict is never paywalled. |
+| **NHID-Clinical-SaaS** (this one) | The commercial product above. What is paid for is the cost of *running a service* — hosted ingestion at volume, cross-vendor normalization, retained evidence with access control, the findings workflow, dashboards and reporting — never a capability withheld from the framework to force a sale. |
+| **[Simulator](https://github.com/NHID-Clinical/Simulator)** | A teaching site that walks through the controls interactively. Not the framework, not this product, not a certification. |
+
+`nhid-clinical/` in this repository is the SaaS backend. It vendors a snapshot
+of the framework engine (`nhid-clinical/src/`) alongside `saas_layer/`; the
+framework repository is the source of truth for the controls themselves.
+
 ## Current status
 
 NHID-Clinical SaaS is an active development repository.
 
 Implemented areas include:
 
+- the monitoring and evidence product above — assessments, ingestion,
+  normalization, per-control evaluation, findings workflow, reviewer time
+  capture, metrics and reporting (`saas_layer/monitoring.py`,
+  `saas_layer/normalization.py`, the `/saas/monitor/*` endpoints, and the
+  Governance Ops screens in `artifacts/nhid-saas`)
 - organization and API-key management
 - Stripe billing integration
 - voice webhook ingestion (Retell, Vapi, Twilio, generic)
@@ -65,6 +160,8 @@ HIPAA-compliant.**
 | `docs/DEPLOYMENT.md` | Deployment topology, the Vercel root-directory problem, the unfilled backend domain |
 | `docs/CONSOLIDATION_CANDIDATES.md` | Packages proposed for retirement — **nothing deleted yet** |
 | `docs/POLICY_ENGINE_RECONCILIATION.md` | The Python and TypeScript control implementations compared |
+| `docs/MONITORING_PRODUCT.md` | **The commercial product**: the loop, the four result states, the ASR dependency, the free-vs-commercial boundary, local setup, the demo path |
+| `docs/AGENT_AUTHORIZATION.md` | What a verified passport does and does not prove, and the operator runbook |
 | `docs/trustlayer-module-architecture.md` | Module map from the public platform pages to code |
 
 ## Running the tests
