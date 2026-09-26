@@ -1,0 +1,91 @@
+name: Pages
+
+# Publishes the Governance Ops dashboard to GitHub Pages.
+#
+# This is the deployment path. The project does not deploy to Vercel, and the
+# vercel.json that used to sit in artifacts/nhid-saas has been removed rather
+# than kept as configuration for a provider nothing publishes through.
+#
+# ONE SETTING IS REQUIRED BEFORE THIS WORKS: Settings -> Pages -> Source must be
+# "GitHub Actions". Pages is already enabled on this repository, but on the
+# older branch-based source -- the run history shows a "pages build and
+# deployment" workflow (dynamic/pages/pages-build-deployment) succeeding on
+# main, and that workflow only exists for a branch source. That build serves the
+# repository root, which is why the published site has been a rendered README
+# rather than the dashboard. While the source stays on a branch,
+# actions/deploy-pages below fails; switching it to GitHub Actions retires the
+# dynamic build and hands the site to this workflow.
+#
+# What gets published is the recorded demonstration: with no backend reachable
+# from Pages, the Ops screens replay output the real evaluator produced
+# (nhid-clinical/scripts/build_demo_fixture.py), and every screen says so.
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+# Pages needs these; nothing here writes to the repository.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two publishes race; let a newer commit supersede an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Toolchain pinned to match ci.yml exactly. A Pages build that resolves
+      # different dependencies than CI would make a green CI meaningless here.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        # BASE_PATH is the project-page subpath, and it is load-bearing: vite
+        # uses it as `base`, and App.tsx feeds the same value to wouter via
+        # import.meta.env.BASE_URL. Build at "/" and every asset 404s, the
+        # server returns index.html instead, and the browser refuses it for the
+        # wrong MIME type -- the classic blank deploy.
+        env:
+          PORT: "3000"
+          BASE_PATH: /${{ github.event.repository.name }}/
+        run: pnpm -C artifacts/nhid-saas run build
+
+      - name: Add SPA fallback
+        # GitHub Pages serves static files and has no rewrite rule, so a deep
+        # link like /ops/findings would 404 on reload. Pages serves 404.html for
+        # any unmatched path, so a copy of index.html there hands routing back
+        # to wouter.
+        run: cp artifacts/nhid-saas/dist/public/index.html artifacts/nhid-saas/dist/public/404.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: artifacts/nhid-saas/dist/public
+
+  deploy:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -61,10 +61,11 @@ comment "mandatory for Replit Auth".
 only: `NHID_MASTER_KNOWLEDGE_ARCHIVE.md`, `docs/trustlayer-module-architecture.md`,
 `.agents/memory/port-assignments.md`, `pnpm-lock.yaml`.
 
-**Deployment references. ⚠ THIS IS THE BLOCKER.** The Vercel project's Root
-Directory is currently set to `artifacts/api-server`. **Removing this package
-before Vercel is repointed to `artifacts/nhid-saas` breaks the deployment
-outright.** See `docs/DEPLOYMENT.md`.
+**Deployment references — the blocker has lifted.** This package was previously
+the Root Directory of a hosted deployment, so removing it would have broken that
+deployment outright. The project no longer deploys that way: the dashboard is
+published by `.github/workflows/pages.yml` from `artifacts/nhid-saas`, and
+nothing deploys from `artifacts/api-server`. See `docs/DEPLOYMENT.md`.
 
 **Recent commits.** `1dac657` (2026-07-29) fixed its typecheck on a clean
 checkout — a build fix, not feature work.
@@ -72,7 +73,7 @@ checkout — a build fix, not feature work.
 **Before removal, check in the Replit workspace:** whether any newer product
 API work was started here rather than in the Python gateway.
 
-**Ordering:** repoint Vercel → verify deploy green → then remove.
+**Ordering:** no longer constrained by a deployment setting; remove as an ordinary consolidation step.
 
 ---
 
@@ -161,7 +162,7 @@ is a reconciliation question, not a deletion one.
 ## Removal procedure, when approved
 
 1. Confirm each item against the Replit workspace.
-2. Repoint Vercel Root Directory to `artifacts/nhid-saas`; verify deploy green.
+2. Confirm the Pages deploy is green before and after each removal.
 3. One commit per package, never mixed with functional changes.
 4. After each: `pnpm install`, `pnpm run typecheck`, `pnpm -C artifacts/nhid-saas run build`, `pytest`.
 5. Update `NHID_MASTER_KNOWLEDGE_ARCHIVE.md`, `replit.md`,

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, TraceRequest, Plan, VoicePolicyRule } from "@/lib/api";
+import { DEMO_API_KEY } from "@/lib/monitoring-api";
 
 export function useGetPlans() {
   return useQuery({
@@ -28,6 +29,18 @@ export function useApiKey() {
   }, []);
 
   return key;
+}
+
+/**
+ * The key the Governance Ops screens should use.
+ *
+ * Falls back to the recorded-demo sentinel when the visitor has no key, so a
+ * build served with no reachable backend still shows the product rather than
+ * empty tables. Deliberately separate from `useApiKey` -- billing, usage and
+ * admin must never fall back to a demonstration.
+ */
+export function useOpsKey(): string {
+  return useApiKey() ?? DEMO_API_KEY;
 }
 
 export function useCreateOrg() {

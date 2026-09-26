@@ -7,12 +7,12 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { Link, useRoute } from "wouter";
-import { useApiKey } from "@/hooks/use-nhid";
+import { useOpsKey } from "@/hooks/use-nhid";
 import { monitorApi, CATEGORY_LABEL } from "@/lib/monitoring-api";
 import { OpsShell, ResultPill, StatusPill, AttestationPill } from "./ops-ui";
 
 export default function OpsInteractionDetail() {
-  const apiKey = useApiKey();
+  const apiKey = useOpsKey();
   const [, params] = useRoute("/ops/interactions/:id");
   const id = params?.id;
 

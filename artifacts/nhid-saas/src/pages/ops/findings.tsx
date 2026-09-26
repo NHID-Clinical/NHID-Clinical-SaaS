@@ -8,12 +8,12 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useRoute } from "wouter";
-import { useApiKey } from "@/hooks/use-nhid";
+import { useOpsKey } from "@/hooks/use-nhid";
 import { monitorApi, CATEGORY_LABEL, Finding } from "@/lib/monitoring-api";
 import { OpsShell, StatusPill, AttestationPill } from "./ops-ui";
 
 export function OpsFindings() {
-  const apiKey = useApiKey();
+  const apiKey = useOpsKey();
   const [status, setStatus] = useState("");
   const [category, setCategory] = useState(
     new URLSearchParams(window.location.search).get("category") ?? "",
@@ -82,7 +82,7 @@ export function OpsFindings() {
 }
 
 export function OpsFindingDetail() {
-  const apiKey = useApiKey();
+  const apiKey = useOpsKey();
   const qc = useQueryClient();
   const [, params] = useRoute("/ops/findings/:id");
   const id = params?.id;

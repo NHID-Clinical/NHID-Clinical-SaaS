@@ -8,12 +8,12 @@
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useApiKey } from "@/hooks/use-nhid";
+import { useOpsKey } from "@/hooks/use-nhid";
 import { monitorApi, fmtPct, CATEGORY_LABEL } from "@/lib/monitoring-api";
 import { OpsShell, Metric } from "./ops-ui";
 
 export default function OpsReports() {
-  const apiKey = useApiKey();
+  const apiKey = useOpsKey();
   const initial = new URLSearchParams(window.location.search).get("assessment") ?? "";
   const [selected, setSelected] = useState(initial);
 

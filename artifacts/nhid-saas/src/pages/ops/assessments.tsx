@@ -11,13 +11,13 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { useApiKey } from "@/hooks/use-nhid";
+import { useOpsKey } from "@/hooks/use-nhid";
 import { monitorApi } from "@/lib/monitoring-api";
 import { OpsShell } from "./ops-ui";
 import { DEMO_INTERACTIONS } from "./demo-data";
 
 export default function OpsAssessments() {
-  const apiKey = useApiKey();
+  const apiKey = useOpsKey();
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [vendor, setVendor] = useState("generic");

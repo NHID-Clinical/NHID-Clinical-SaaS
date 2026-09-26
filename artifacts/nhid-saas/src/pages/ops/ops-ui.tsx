@@ -11,6 +11,8 @@
  */
 import { ReactNode } from "react";
 import { Link } from "wouter";
+import { useApiKey } from "@/hooks/use-nhid";
+import { DEMO_API_KEY, isDemoKey } from "@/lib/monitoring-api";
 
 export const OPS_CSS = `
 .ops {
@@ -122,7 +124,31 @@ export function OpsShell({
           </Link>
         ))}
       </nav>
+      <DemoNotice />
       {children}
+    </div>
+  );
+}
+
+/**
+ * Says, on every Ops screen, that the figures are recorded and synthetic.
+ *
+ * It is not a footnote. Someone landing on a published URL has no other way to
+ * know these are ten authored interactions replayed through the evaluator
+ * rather than a customer's traffic, and this product's whole claim is that a
+ * governance record should not overstate what it observed.
+ */
+export function DemoNotice() {
+  const apiKey = useApiKey();
+  if (!isDemoKey(apiKey ?? DEMO_API_KEY)) return null;
+  return (
+    <div className="notice" style={{ marginBottom: 16 }}>
+      <strong>Recorded demonstration.</strong> No organization key is connected,
+      so these screens are replaying <strong>10 synthetic interactions</strong>{" "}
+      through output the real evaluator produced — not observed traffic, not
+      customer data, and not a pilot. This product has zero deployments. Writing
+      is disabled; connect an API key to ingest and evaluate your own
+      interactions.
     </div>
   );
 }
