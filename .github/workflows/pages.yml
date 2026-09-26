@@ -6,15 +6,16 @@ name: Pages
 # vercel.json that used to sit in artifacts/nhid-saas has been removed rather
 # than kept as configuration for a provider nothing publishes through.
 #
-# ONE SETTING IS REQUIRED BEFORE THIS WORKS: Settings -> Pages -> Source must be
-# "GitHub Actions". Pages is already enabled on this repository, but on the
-# older branch-based source -- the run history shows a "pages build and
-# deployment" workflow (dynamic/pages/pages-build-deployment) succeeding on
-# main, and that workflow only exists for a branch source. That build serves the
-# repository root, which is why the published site has been a rendered README
-# rather than the dashboard. While the source stays on a branch,
-# actions/deploy-pages below fails; switching it to GitHub Actions retires the
-# dynamic build and hands the site to this workflow.
+# No repository setting is needed: the Pages source is already GitHub Actions,
+# and this workflow is what publishes. On its first run it deployed to
+# https://nhid-clinical.github.io/NHID-Clinical-SaaS/ -- actions/deploy-pages
+# created the deployment and reported success on the first attempt, which it can
+# only do when the source is GitHub Actions.
+#
+# A "pages build and deployment" run (dynamic/pages/pages-build-deployment) also
+# appears on main and also succeeds. It is not a competing branch build to be
+# switched off; an earlier revision of this comment claimed the source was still
+# branch-based on the strength of that run alone, and was wrong.
 #
 # What gets published is the recorded demonstration: with no backend reachable
 # from Pages, the Ops screens replay output the real evaluator produced
