@@ -99,17 +99,20 @@ For the published dashboard:
 - [x] `404.html` fallback so deep links survive a reload
 - [x] Recorded fixture regenerated from the real evaluator and guarded by `--check`
 - [x] Every Ops screen states that the figures are synthetic and recorded
-- [ ] **Settings → Pages → Source** switched from the branch build to **GitHub Actions**
+- [x] Published and reachable at **<https://nhid-clinical.github.io/NHID-Clinical-SaaS/>**
 
-That last one is the only setting outside this repository, and it is not merely
-"enable Pages". Pages is already enabled, on the older **branch-based** source:
-the Actions history shows a `pages build and deployment` run
-(`dynamic/pages/pages-build-deployment`) succeeding on `main`, and that workflow
-exists only for a branch source. It serves the repository root, which is why the
-published site has been a rendered README rather than the dashboard. While the
-source stays on a branch, `actions/deploy-pages` in `pages.yml` fails; switching
-it to GitHub Actions retires the dynamic build and hands the site to the
-workflow.
+**No repository setting is required.** The Pages source is already GitHub
+Actions. On the workflow's first run, `actions/deploy-pages` created the
+deployment and reported success on the first attempt — which it can only do when
+the source is GitHub Actions.
+
+A `pages build and deployment` run (`dynamic/pages/pages-build-deployment`) also
+appears on `main` and also succeeds. It is not a competing branch build to be
+switched off. An earlier revision of this document said the source was still
+branch-based, that the published site was therefore a rendered README, and that
+`actions/deploy-pages` would fail until someone changed the setting. That was
+wrong: it was inferred from the presence of that run alone, and the deploy
+succeeded first time with no setting changed.
 
 If a backend is ever deployed:
 
