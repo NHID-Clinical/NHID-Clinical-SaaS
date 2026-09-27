@@ -70,6 +70,14 @@ def init_db() -> None:
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS admin_login_attempts (
+                    client_ip    TEXT PRIMARY KEY,
+                    failed_count INTEGER NOT NULL,
+                    window_start DOUBLE PRECISION NOT NULL,
+                    locked_until DOUBLE PRECISION
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS processed_events (
                     event_id     TEXT PRIMARY KEY,
                     processed_at TEXT NOT NULL
@@ -446,6 +454,135 @@ def purge_expired_admin_sessions() -> None:
             cur = conn.cursor()
             cur.execute(
                 "DELETE FROM admin_sessions WHERE expires_at < %s", (_time.time(),)
+            )
+    finally:
+        conn.close()
+
+
+# ── Admin login throttling ────────────────────────────────────────────────────
+#
+# What this control does: counts failed /admin/login attempts per client IP in a
+# sliding window and locks that IP out once the threshold is crossed.
+#
+# What it does NOT do, stated plainly because the gap it replaces was a control
+# that looked real and was not (a React counter and a client-side setTimeout,
+# both bypassed by not using a browser):
+#
+#   * It is keyed on the immediate peer address. A caller spread across many
+#     source addresses gets the full allowance from each one.
+#   * It does not rate-limit successful logins, and it does not detect a
+#     credential already known to an attacker.
+#   * It is not an audit record. Failures are counted here and logged to the
+#     application logger; nothing is written to `audit_traces`.
+#
+# It is table-backed rather than in-process so that the count survives a restart
+# and is shared by every worker.
+
+ADMIN_LOGIN_MAX_FAILURES = 5
+ADMIN_LOGIN_WINDOW_SECONDS = 15 * 60
+ADMIN_LOGIN_LOCKOUT_SECONDS = 15 * 60
+
+
+def admin_login_locked_until(client_ip: str) -> Optional[float]:
+    """Return the epoch second the lock lifts, or None when not locked."""
+    if not client_ip:
+        return None
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT locked_until FROM admin_login_attempts WHERE client_ip = %s",
+            (client_ip,),
+        )
+        row = cur.fetchone()
+        if row is None or row["locked_until"] is None:
+            return None
+        return row["locked_until"] if row["locked_until"] > _time.time() else None
+    finally:
+        conn.close()
+
+
+def record_failed_admin_login(client_ip: str) -> Optional[float]:
+    """Count one failure against `client_ip`; return the lock expiry if it locks.
+
+    The counter is incremented in a single statement rather than read-then-write
+    so that simultaneous attempts cannot both observe the pre-increment count and
+    each conclude they are under the threshold.
+    """
+    if not client_ip:
+        return None
+    now = _time.time()
+    params = {
+        "ip": client_ip,
+        "now": now,
+        "window_start": now - ADMIN_LOGIN_WINDOW_SECONDS,
+        "threshold": ADMIN_LOGIN_MAX_FAILURES,
+        "locked_until": now + ADMIN_LOGIN_LOCKOUT_SECONDS,
+    }
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO admin_login_attempts
+                       (client_ip, failed_count, window_start, locked_until)
+                VALUES (%(ip)s, 1, %(now)s, NULL)
+                ON CONFLICT (client_ip) DO UPDATE SET
+                    -- A window that has already elapsed starts over at 1 rather
+                    -- than accumulating forever across unrelated sessions.
+                    failed_count = CASE
+                        WHEN admin_login_attempts.window_start < %(window_start)s THEN 1
+                        ELSE admin_login_attempts.failed_count + 1
+                    END,
+                    window_start = CASE
+                        WHEN admin_login_attempts.window_start < %(window_start)s
+                        THEN %(now)s
+                        ELSE admin_login_attempts.window_start
+                    END,
+                    locked_until = CASE
+                        WHEN admin_login_attempts.window_start >= %(window_start)s
+                         AND admin_login_attempts.failed_count + 1 >= %(threshold)s
+                        THEN %(locked_until)s
+                        ELSE NULL
+                    END
+                RETURNING failed_count, locked_until
+                """,
+                params,
+            )
+            row = cur.fetchone()
+            return row["locked_until"] if row else None
+    finally:
+        conn.close()
+
+
+def clear_admin_login_attempts(client_ip: str) -> None:
+    """Forget the failures for `client_ip`. Called after a successful login."""
+    if not client_ip:
+        return
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM admin_login_attempts WHERE client_ip = %s", (client_ip,)
+            )
+    finally:
+        conn.close()
+
+
+def purge_stale_admin_login_attempts() -> None:
+    """Drop rows whose window has elapsed and whose lock, if any, has lifted."""
+    now = _time.time()
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """DELETE FROM admin_login_attempts
+                    WHERE window_start < %s
+                      AND (locked_until IS NULL OR locked_until < %s)""",
+                (now - ADMIN_LOGIN_WINDOW_SECONDS, now),
             )
     finally:
         conn.close()
