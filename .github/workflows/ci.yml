@@ -56,6 +56,27 @@ jobs:
         working-directory: nhid-clinical
         run: pip install -r requirements.txt
 
+      - name: Apply migrations to a fresh database
+        working-directory: nhid-clinical
+        # This is the exact command render.yaml runs as its preDeployCommand.
+        #
+        # It must come BEFORE any step that imports saas_layer.gateway, because
+        # importing it runs ensure_schema() and applies the baseline. Placed
+        # after check_startup.py, this step found the schema already built and
+        # reported "up to date" -- so it exercised the CLI's read paths and
+        # never once applied a migration, which is exactly the thing worth
+        # testing. The grep below asserts that it really applied, so the step
+        # fails loudly if the ordering regresses rather than quietly going
+        # back to proving nothing.
+        run: |
+          python scripts/migrate.py | tee /tmp/migrate.out
+          grep -q "Applied 1 migration" /tmp/migrate.out || {
+            echo "::error::migrate.py applied nothing — the schema already existed, so this step is not testing a fresh-database migration. Check the step ordering."
+            exit 1
+          }
+          python scripts/migrate.py --check   # must now report nothing pending
+          python scripts/migrate.py --status
+
       - name: Validate required configuration and module imports
         working-directory: nhid-clinical
         # Prints variable names and a present/absent verdict only — never values.
@@ -71,18 +92,6 @@ jobs:
             exit 1
           fi
           echo "Confirmed: startup is refused when no admin credential is set."
-
-      - name: Apply migrations to a fresh database
-        working-directory: nhid-clinical
-        # This is the exact command render.yaml runs as its preDeployCommand,
-        # against a database that starts empty on every run. It is the only
-        # check that the production release step actually works: the test suite
-        # reaches the same schema by a different route, because importing the
-        # gateway bootstraps it.
-        run: |
-          python scripts/migrate.py
-          python scripts/migrate.py --check   # must now report nothing pending
-          python scripts/migrate.py --status
 
       - name: Refuse to start in production without CORS origins
         working-directory: nhid-clinical
