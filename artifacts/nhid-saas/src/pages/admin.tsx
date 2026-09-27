@@ -6,7 +6,7 @@ import { Shield, LogOut, RefreshCw, Eye, EyeOff, Users, Activity, AlertCircle, L
 interface AdminOrg {
   org_id: string;
   org_name: string;
-  api_key: string;
+  api_key_prefix: string | null;
   plan: string;
   status: string;
   stripe_customer_id: string | null;
@@ -106,7 +106,6 @@ function expiryColor(h: number): string {
   if (h < 12) return "#53d8fb";
   return "#475569";
 }
-function mask(key: string) { return key.slice(0, 8) + "…" + key.slice(-4); }
 const planColor = (p: string) => ({ free: "#94a3b8", l1: "#00c2a8", l2: "#53d8fb", l3: "#fbbd24" }[p] ?? "#94a3b8");
 const statusColor = (s: string) => ({ active: "#3fb950", canceled: "#f85149", past_due: "#d29922" }[s] ?? "#94a3b8");
 
@@ -162,7 +161,11 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
     setError("");
     setLoading(true);
     try {
-      /* Artificial delay to prevent rapid enumeration */
+      /* A brief pause so the form does not flicker between submit and result.
+         This is not the protection against guessing -- it is client-side, and a
+         caller that is not a browser simply skips it. The control is the
+         per-IP throttle on POST /admin/login (saas_layer/auth.py). Same for the
+         MAX_ATTEMPTS counter below: useful feedback, not a barrier. */
       await new Promise(res => setTimeout(res, 1200 + Math.random() * 400));
       const token = await adminLogin(username, password);
       localStorage.setItem("nhid_admin_token", token);
@@ -327,7 +330,8 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
         </div>
 
         <div style={{ textAlign: "center", marginTop: 16, fontSize: 10, color: "#7a8fa8", opacity: 0.5 }}>
-          All access attempts are logged and audited.
+          Repeated failed attempts are rate-limited by the server and written to
+          the application log.
         </div>
       </div>
     </div>
@@ -360,7 +364,6 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
   const [voiceEscalatedCount, setVoiceEscalatedCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
   const [tab, setTab] = useState<"orgs" | "activity" | "voice">("orgs");
   const [search, setSearch] = useState("");
   const [voiceOrgFilter, setVoiceOrgFilter] = useState("");
@@ -413,14 +416,6 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
     if (!isMounted.current) { isMounted.current = true; return; }
     fetchVoiceSessions(voiceStatusFilter).catch(() => {});
   }, [voiceStatusFilter, fetchVoiceSessions]);
-
-  const toggleKey = (orgId: string) => {
-    setRevealedKeys(prev => {
-      const next = new Set(prev);
-      next.has(orgId) ? next.delete(orgId) : next.add(orgId);
-      return next;
-    });
-  };
 
   const handleExtend = useCallback(async (sid: string) => {
     setVoiceActionLoading(p => ({ ...p, [sid]: "extend" }));
@@ -754,22 +749,19 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                             <option value="168">7d</option>
                           </select>
                         </td>
+                        {/* The key prefix, and only the prefix. There is no reveal
+                            control because there is nothing to reveal: the server
+                            stores a SHA-256 and this short non-secret fragment, and
+                            drops the plaintext at creation. A toggle here would imply
+                            the server holds a key it deliberately does not. */}
                         <td style={tableTd}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <code style={{
-                              ...mono, color: "#00c2a8",
-                              background: "rgba(0,194,168,0.08)", borderRadius: 4, padding: "2px 7px",
-                              border: "1px solid rgba(0,194,168,0.15)",
-                            }}>
-                              {revealedKeys.has(org.org_id) ? org.api_key : mask(org.api_key)}
-                            </code>
-                            <button
-                              onClick={() => toggleKey(org.org_id)}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "#7a8fa8", padding: 2 }}
-                            >
-                              {revealedKeys.has(org.org_id) ? <EyeOff size={12} /> : <Eye size={12} />}
-                            </button>
-                          </div>
+                          <code style={{
+                            ...mono, color: "#00c2a8",
+                            background: "rgba(0,194,168,0.08)", borderRadius: 4, padding: "2px 7px",
+                            border: "1px solid rgba(0,194,168,0.15)",
+                          }}>
+                            {org.api_key_prefix ? `${org.api_key_prefix}…` : "—"}
+                          </code>
                         </td>
                         <td style={{ ...tableTd, ...mono, color: org.stripe_subscription_id ? "#3fb950" : "#7a8fa8" }}>
                           {org.stripe_subscription_id ? org.stripe_subscription_id.slice(0, 14) + "…" : "—"}
@@ -1099,7 +1091,25 @@ export default function AdminPage() {
 
   const handleLogin = (t: string) => setToken(t);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Tell the server first. POST /admin/logout deletes the session row, and
+    // without this call the token stays valid server-side for the rest of its
+    // 8-hour TTL -- so "logged out" meant only "this browser forgot the token".
+    //
+    // The local state is cleared regardless of the outcome: if the request
+    // fails, refusing to sign out locally would leave the operator staring at
+    // a session they asked to end.
+    const current = token;
+    if (current) {
+      try {
+        await fetch(`${ADMIN_BASE}/logout`, {
+          method: "POST",
+          headers: { "X-Admin-Session": current },
+        });
+      } catch {
+        /* network failure: fall through and clear locally anyway */
+      }
+    }
     localStorage.removeItem("nhid_admin_token");
     setToken(null);
   };

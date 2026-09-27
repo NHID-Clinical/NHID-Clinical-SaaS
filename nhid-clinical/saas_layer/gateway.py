@@ -55,6 +55,8 @@ from saas_layer.auth import (
     list_orgs, increment_usage,
     create_admin_session, validate_admin_session,
     delete_admin_session, purge_expired_admin_sessions,
+    admin_login_locked_until, record_failed_admin_login,
+    clear_admin_login_attempts, purge_stale_admin_login_attempts,
     link_org_to_user, get_org_by_user,
 )
 from saas_layer.usage import log_request, get_usage_summary, get_recent_activity, get_global_stats
@@ -228,7 +230,7 @@ def get_current_org(x_api_key: Optional[str] = Header(default=None)) -> Dict[str
 
 
 def require_admin_session(x_admin_session: Optional[str] = Header(default=None)) -> str:
-    """Validate an admin session token (SQLite-backed, survives restarts)."""
+    """Validate an admin session token (Postgres-backed, survives restarts)."""
     if not x_admin_session:
         raise HTTPException(status_code=401, detail="Admin session token required (X-Admin-Session header)")
     if not validate_admin_session(x_admin_session):
@@ -1654,12 +1656,19 @@ class OrgSessionRetentionBody(BaseModel):
 
 
 @app.post("/admin/login", tags=["Admin"])
-async def admin_login(body: AdminLoginRequest):
+async def admin_login(body: AdminLoginRequest, request: Request):
     """
-    Issue a persistent admin session token (SQLite-backed, 8-hour TTL).
+    Issue a persistent admin session token (Postgres-backed, 8-hour TTL).
 
     Credentials are required configuration: the gateway refuses to start
     without them, so there is no default-password path into /admin/*.
+
+    Repeated failures are throttled per client IP — see the block comment above
+    `record_failed_admin_login` in `saas_layer/auth.py` for exactly what that
+    covers and what it does not. The client is the immediate peer:
+    `X-Forwarded-For` is deliberately ignored, because nothing in this service
+    declares a trusted proxy, and honouring the header would let a caller choose
+    its own throttle bucket and so opt out of the control.
     """
     creds = _ADMIN_CREDS
     if creds is None:
@@ -1667,12 +1676,31 @@ async def admin_login(body: AdminLoginRequest):
         _logger.error("ADMIN_LOGIN_UNAVAILABLE: credentials not loaded")
         raise HTTPException(status_code=503, detail="Admin authentication unavailable")
 
+    client_ip = request.client.host if request.client else ""
+
+    # Checked before the credential comparison, so a locked-out caller learns
+    # nothing about the credential it just guessed.
+    locked_until = admin_login_locked_until(client_ip)
+    if locked_until is not None:
+        retry_after = max(1, int(locked_until - time.time()))
+        _logger.warning("ADMIN_LOGIN_THROTTLED retry_after=%ds", retry_after)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed admin login attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     user_ok = verify_username(body.username, creds.username)
     pass_ok = verify_password(body.password, creds.password_hash)
     if not (user_ok and pass_ok):
-        # Log the attempt, never the supplied or expected credential.
-        _logger.warning("ADMIN_LOGIN_FAILED")
+        # Log the attempt, never the supplied or expected credential. The
+        # response stays identical whichever field was wrong.
+        now_locked = record_failed_admin_login(client_ip)
+        _logger.warning("ADMIN_LOGIN_FAILED locked=%s", bool(now_locked))
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
+
+    clear_admin_login_attempts(client_ip)
+    purge_stale_admin_login_attempts()
 
     token = str(uuid.uuid4())
     expires_at = time.time() + _ADMIN_SESSION_TTL
