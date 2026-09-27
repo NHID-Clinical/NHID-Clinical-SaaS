@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Shield, LogOut, RefreshCw, Eye, EyeOff, Users, Activity, AlertCircle, Lock, PhoneCall } from "lucide-react";
+import { API_BASE_URL } from "@/lib/config";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -49,7 +50,7 @@ interface VoiceSession {
 
 // ── Admin API ─────────────────────────────────────────────────────────────────
 
-const ADMIN_BASE = "/saas-api/admin";
+const ADMIN_BASE = `${API_BASE_URL}/admin`;
 
 async function adminFetch<T>(path: string, token: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(`${ADMIN_BASE}${path}`, {

@@ -7,8 +7,9 @@
  */
 
 import demoFixture from "@/pages/ops/demo-fixture.json";
+import { API_BASE_URL } from "@/lib/config";
 
-const BASE = "/saas-api";
+const BASE = API_BASE_URL;
 
 export type ControlResult = "pass" | "exception" | "unknown" | "not_assessable";
 export type FindingStatus = "open" | "under_review" | "resolved";

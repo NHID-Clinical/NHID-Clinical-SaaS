@@ -4,6 +4,7 @@ import {
   Settings2, Eye, EyeOff, Copy, Check, CreditCard, Shield,
   Building2, Key, Clock, ExternalLink, AlertTriangle, CheckCircle,
 } from "lucide-react";
+import { apiUrl } from "@/lib/config";
 
 interface OrgDetails {
   org_id: string;
@@ -81,7 +82,7 @@ export default function SettingsPage() {
     setApiKey(key);
     if (!key) { setLoading(false); return; }
 
-    fetch("/saas-api/saas/orgs/me", { headers: { "X-API-Key": key } })
+    fetch(apiUrl("/saas/orgs/me"), { headers: { "X-API-Key": key } })
       .then(r => r.json())
       .then(data => setOrg(data))
       .catch(() => {
@@ -116,7 +117,7 @@ export default function SettingsPage() {
   const planColor = PLAN_COLORS[planKey] ?? "#64748b";
   const planLabel = PLAN_LABELS[planKey] ?? planKey.toUpperCase();
   const isPaid = planKey !== "free";
-  const badgeUrl = org?.org_id ? `/saas-api/saas/badge/${org.org_id}` : null;
+  const badgeUrl = org?.org_id ? apiUrl(`/saas/badge/${org.org_id}`) : null;
 
   if (loading) {
     return (

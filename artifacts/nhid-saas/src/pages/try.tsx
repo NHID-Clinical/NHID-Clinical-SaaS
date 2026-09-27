@@ -5,8 +5,9 @@ import {
   Zap, RefreshCw, ChevronDown, ChevronRight, ExternalLink,
   AlertTriangle, Layers, Lock, Phone, User, Bot, Link2, Globe,
 } from "lucide-react";
+import { API_BASE_URL, apiUrl } from "@/lib/config";
 
-const SAAS = "/saas-api/saas";
+const SAAS = `${API_BASE_URL}/saas`;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1660,9 +1661,9 @@ export default function TryPage() {
                       <div style={{ fontSize: 9, color: "#475569", marginBottom: 4 }}>{label}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(0,0,0,0.3)", borderRadius: 7, padding: "7px 10px", border: "1px solid rgba(255,255,255,0.04)" }}>
                         <code style={{ flex: 1, fontSize: 9, color: "#53d8fb", fontFamily: "monospace", wordBreak: "break-all" }}>
-                          {`${window.location.origin}/saas-api/saas${path}`}
+                          {apiUrl(`/saas${path}`)}
                         </code>
-                        <CopyBtn value={`${window.location.origin}/saas-api/saas${path}`} size={10} />
+                        <CopyBtn value={apiUrl(`/saas${path}`)} size={10} />
                       </div>
                     </div>
                   ))}
