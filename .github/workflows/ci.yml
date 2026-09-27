@@ -72,6 +72,33 @@ jobs:
           fi
           echo "Confirmed: startup is refused when no admin credential is set."
 
+      - name: Apply migrations to a fresh database
+        working-directory: nhid-clinical
+        # This is the exact command render.yaml runs as its preDeployCommand,
+        # against a database that starts empty on every run. It is the only
+        # check that the production release step actually works: the test suite
+        # reaches the same schema by a different route, because importing the
+        # gateway bootstraps it.
+        run: |
+          python scripts/migrate.py
+          python scripts/migrate.py --check   # must now report nothing pending
+          python scripts/migrate.py --status
+
+      - name: Refuse to start in production without CORS origins
+        working-directory: nhid-clinical
+        # Regression guard: a production deployment with no allowed origins is
+        # either broken or wide open, so startup must abort rather than choose.
+        run: |
+          if APP_ENV=production CORS_ALLOWED_ORIGINS= python -c "
+          import saas_layer.gateway as g
+          import asyncio
+          asyncio.run(g._lifespan(g.app).__aenter__())
+          "; then
+            echo "::error::Startup succeeded in production with no CORS_ALLOWED_ORIGINS."
+            exit 1
+          fi
+          echo "Confirmed: production startup is refused without CORS_ALLOWED_ORIGINS."
+
       - name: Run tests
         working-directory: nhid-clinical
         run: python -m pytest tests/ -q
