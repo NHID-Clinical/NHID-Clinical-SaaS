@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { CheckCircle, Zap, Shield, Server, Gift, ArrowRight, Loader2, ExternalLink } from "lucide-react";
+import { apiUrl } from "@/lib/config";
 
 interface StripePlan {
   price_id: string;
@@ -95,7 +96,7 @@ export default function PricingPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/saas-api/saas/billing/plans")
+    fetch(apiUrl("/saas/billing/plans"))
       .then(r => r.json())
       .then(data => setPlans(data.plans ?? []))
       .catch(() => setPlans([]))

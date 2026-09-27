@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { CreditCard, Zap, Shield, Server, CheckCircle, ArrowRight, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl } from "@/lib/config";
 
 interface Plan {
   price_id: string;
@@ -45,7 +46,7 @@ export default function Billing() {
       } catch { /* ignore */ }
     }
 
-    fetch("/saas-api/saas/billing/plans")
+    fetch(apiUrl("/saas/billing/plans"))
       .then(r => r.json())
       .then(data => {
         const sorted = (data.plans ?? []).sort(
@@ -70,7 +71,7 @@ export default function Billing() {
     setCheckingOut(plan.plan);
     try {
       const base = window.location.origin + import.meta.env.BASE_URL.replace(/\/$/, "");
-      const res = await fetch("/saas-api/saas/billing/checkout", {
+      const res = await fetch(apiUrl("/saas/billing/checkout"), {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
         body: JSON.stringify({

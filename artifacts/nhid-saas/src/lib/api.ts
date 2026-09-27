@@ -1,6 +1,8 @@
 /** Typed fetch helpers for the NHID Clinical SaaS gateway (Python FastAPI, port 8010). */
 
-const BASE = "/saas-api";
+import { API_BASE_URL } from "@/lib/config";
+
+const BASE = API_BASE_URL;
 
 export type Plan = "free" | "l1" | "l2" | "l3";
 export type OrgStatus = "active" | "canceled" | "past_due";

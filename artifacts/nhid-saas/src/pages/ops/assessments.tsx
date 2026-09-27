@@ -115,6 +115,21 @@ export default function OpsAssessments() {
         <textarea rows={7} value={payload} onChange={(e) => setPayload(e.target.value)}
           placeholder='[{"external_id":"CALL-1","occurred_at":"2026-09-01T10:00:00Z","ai_assessment":"non_human","turns":[{"speaker":"agent","text":"I am an automated system.","offset_ms":0}]}]'
           style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12 }} />
+        {/* Placed at the point of upload, not in a policy page nobody opens.
+            This is the moment someone pastes a transcript, and transcripts of
+            real payer-provider calls contain PHI. */}
+        <div style={{
+          marginTop: 10, padding: "10px 12px", borderRadius: 8,
+          border: "1px solid rgba(251,189,36,0.35)",
+          background: "rgba(251,189,36,0.07)", fontSize: 12, lineHeight: 1.6,
+        }}>
+          <strong>Synthetic and test data only.</strong> Do not upload real
+          protected health information unless and until this deployment, its
+          contracts, its security controls and the applicable compliance
+          requirements have been separately validated. Installing this software
+          does not make a deployment HIPAA compliant, and nothing here has been
+          assessed against that standard.
+        </div>
         <div className="toolbar" style={{ marginTop: 8 }}>
           <button className="primary" disabled={!target || !payload || ingest.isPending}
             onClick={uploadPasted}>Ingest and evaluate</button>

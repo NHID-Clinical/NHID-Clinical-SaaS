@@ -47,7 +47,7 @@ if _CLINICAL_DIR not in sys.path:
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Any, Dict, List
 
 from saas_layer.auth import (
@@ -162,6 +162,18 @@ async def _lifespan(app: FastAPI):
     _ADMIN_CREDS = load_admin_credentials()
     _logger.info("ADMIN: credentials loaded (user=%s)", _ADMIN_CREDS.username)
 
+    # In production the browser origin is not guessable, so an unset
+    # CORS_ALLOWED_ORIGINS means the deployment is either broken (the frontend
+    # cannot call the API) or wide open, depending on the fallback. Refuse to
+    # start rather than pick one silently.
+    if _is_production() and not os.environ.get("CORS_ALLOWED_ORIGINS", "").strip():
+        raise RuntimeError(
+            "CORS_ALLOWED_ORIGINS is required in production. Set it to the exact "
+            "origin(s) serving the frontend, comma-separated, e.g. "
+            "https://app.nhid-clinical.org"
+        )
+    _logger.info("CORS: %d allowed origin(s) configured", len(_cors_origins()))
+
     task = asyncio.create_task(_voice_session_cleanup_loop())
     try:
         yield
@@ -180,12 +192,69 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+def _cors_origins() -> List[str]:
+    """Origins allowed to call this API, from CORS_ALLOWED_ORIGINS.
+
+    Comma-separated, exact origins (scheme://host[:port]), e.g.
+        https://app.nhid-clinical.org,https://nhid-clinical.org
+
+    Why this is no longer `["*"]`: the frontend is served from a different
+    origin than the API in the target deployment, so CORS is load-bearing rather
+    than incidental. A wildcard let any page on the internet script cross-origin
+    requests against this API, including repeated POSTs to /admin/login. It is
+    also incompatible with credentialed requests, so it could not have survived
+    a cookie-based session anyway.
+
+    Outside production an empty setting falls back to the local dev origins, so
+    a developer who has set nothing still gets a working proxy. In production an
+    empty setting is fatal at startup rather than silently permissive -- see
+    `_lifespan`.
+    """
+    raw = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
+    if raw:
+        return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+    return [
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        "http://localhost:5173", "http://127.0.0.1:5173",
+    ]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    # Named rather than "*": these are the headers this API actually reads.
+    allow_headers=["Content-Type", "X-API-Key", "X-Admin-Session", "X-NHID-API-Key"],
 )
+
+
+# A bounded list is not a bounded request: 500 interactions each carrying a
+# multi-megabyte transcript is still arbitrarily large, and the body is fully
+# read into memory before any validator sees it. This caps the body itself.
+MAX_REQUEST_BYTES = int(os.environ.get("MAX_REQUEST_BYTES", str(10 * 1024 * 1024)))
+
+
+@app.middleware("http")
+async def _limit_request_size(request: Request, call_next):
+    """Refuse oversized bodies with 413 before they are parsed.
+
+    Content-Length is client-supplied and can be absent on a chunked upload, so
+    this is a cheap first gate rather than a guarantee. The platform in front of
+    the app (Render, or any reverse proxy) enforces the hard limit; what this
+    adds is a clear 413 with a stated maximum instead of a worker dying on an
+    upload nobody meant to send.
+    """
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_REQUEST_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={
+                "detail": f"Request body exceeds the {MAX_REQUEST_BYTES} byte limit. "
+                          f"Split the upload; ingestion is idempotent."
+            },
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -210,11 +279,23 @@ async def _strip_path_prefix(request: Request, call_next):
     return await call_next(request)
 
 
-init_db()
-migrate_billing_columns()
-voice_policy_store.init_voice_policy_table()
-agent_registry.init_agent_registry_tables()
-monitoring.init_monitoring_tables()
+# Schema bootstrap, routed through the migration runner so that there is one
+# path that creates schema and it records what it did in `schema_migrations`.
+#
+# This used to be five bare DDL calls here at import time. They are still the
+# baseline -- migration 0001 runs exactly them -- but now every worker that
+# boots takes an advisory lock, checks the ledger, and almost always finds
+# nothing to do, instead of all of them re-issuing DDL at once.
+#
+# A deployment should run `python scripts/migrate.py` as a release step so the
+# schema is settled before any worker starts. Set NHID_SKIP_SCHEMA_BOOTSTRAP=1
+# once that is in place and this becomes a no-op; leaving it unset keeps the
+# previous self-bootstrapping behaviour, which is what local development and
+# the test suite rely on.
+if os.environ.get("NHID_SKIP_SCHEMA_BOOTSTRAP", "").strip() not in ("1", "true", "True"):
+    from saas_layer.migrations import ensure_schema  # noqa: E402
+
+    ensure_schema()
 
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
@@ -315,7 +396,10 @@ async def health():
     stripe_mode = _probe_stripe()
     nhid_ok = nhid_client.is_reachable()
     db_ok = _probe_db()
-    stats = get_global_stats()
+    # `org_count` used to be reported here. It is a business metric -- how many
+    # customers this deployment has -- on an endpoint with no authentication,
+    # and a health check does not need it to answer "is this service up". The
+    # authenticated /admin/usage still reports it.
     return {
         "status": "ok",
         "environment": "production" if _is_production() else "development",
@@ -323,7 +407,6 @@ async def health():
         "stripe": stripe_mode,
         "db": "healthy" if db_ok else "error",
         "admin": "active",
-        "org_count": stats.get("total_orgs", 0),
     }
 
 
@@ -334,9 +417,15 @@ async def saas_health():
 
 
 @app.get("/saas/system/status", tags=["Health"])
-async def system_status():
+async def system_status(_token: str = Depends(require_admin_session)):
     """
-    Flat system status used by monitoring and the admin portal.
+    Flat system status for the operator, including tenant counts.
+
+    Admin-gated, unlike /health. It reports `org_count` and `usage_today` --
+    how many customers this deployment has and how many were active -- which
+    is operator information, not a liveness signal. It was public; nothing in
+    the repository called it, so requiring a session breaks no caller. Uptime
+    monitors should point at /health, which stays open and carries no counts.
     """
     stripe_mode = _probe_stripe()
     nhid_ok = nhid_client.is_reachable()
@@ -1978,10 +2067,22 @@ class CreateAssessmentRequest(BaseModel):
     is_synthetic: bool = False
 
 
+# Ingestion is the one unbounded write an authenticated customer can reach:
+# every interaction in the request is normalized, stored and evaluated
+# synchronously, in-process. Without a bound, one request decides how much
+# memory and CPU the instance spends, which on a small deployment is the whole
+# instance. 500 is generous for a quarter of sampled calls and small enough to
+# stay well inside a request timeout; a larger set is several uploads, which
+# ingestion already handles idempotently.
+MAX_INTERACTIONS_PER_REQUEST = 500
+
+
 class IngestRequest(BaseModel):
     assessment_id: str
     vendor: str = "generic"
-    interactions: List[Dict[str, Any]]
+    interactions: List[Dict[str, Any]] = Field(
+        ..., min_length=1, max_length=MAX_INTERACTIONS_PER_REQUEST
+    )
     is_synthetic: bool = False
 
 
@@ -2025,6 +2126,13 @@ async def monitor_ingest(body: IngestRequest, org: Dict = Depends(subscription_g
     a payer can see anything would defeat the only property that makes this
     adoptable, which is that nothing in production has to change.
     """
+    # The assessment must belong to the caller. `assessment_id` arrives in the
+    # request body, so without this check it is an identifier the caller chooses
+    # rather than one it owns -- and interactions naming another organization's
+    # assessment were accepted.
+    if monitoring.get_assessment(org["org_id"], body.assessment_id) is None:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+
     ingested, errors = [], []
     for index, payload in enumerate(body.interactions):
         try:
@@ -2041,6 +2149,11 @@ async def monitor_ingest(body: IngestRequest, org: Dict = Depends(subscription_g
 
 @app.post("/saas/monitor/assessments/{assessment_id}/evaluate", tags=["Monitoring"])
 async def monitor_evaluate(assessment_id: str, org: Dict = Depends(subscription_gated_org)):
+    # Defence in depth. `evaluate_assessment` already filters on org_id, so a
+    # foreign id evaluates nothing -- but it answers 200 with a zero count,
+    # which reads as "there was nothing to do" rather than "that is not yours".
+    if monitoring.get_assessment(org["org_id"], assessment_id) is None:
+        raise HTTPException(status_code=404, detail="Assessment not found")
     return monitoring.evaluate_assessment(org["org_id"], assessment_id)
 
 

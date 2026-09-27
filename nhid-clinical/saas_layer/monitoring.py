@@ -539,6 +539,29 @@ def create_assessment(org_id: str, name: str, period_start: Optional[str] = None
             "is_synthetic": is_synthetic}
 
 
+def get_assessment(org_id: str, assessment_id: str) -> Optional[Dict[str, Any]]:
+    """One assessment, scoped to its owning organization.
+
+    Every write that names an `assessment_id` must pass through this first.
+    Without it, `assessment_id` is an identifier the caller supplies and nothing
+    checks: one organization could ingest interactions naming another
+    organization's assessment, and the rows landed -- under the caller's own
+    `org_id`, so reads stayed correctly scoped, but bound to an assessment it
+    does not own. Reads being safe is not the same as the write being legitimate.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM assessments WHERE org_id=%s AND assessment_id=%s",
+            (org_id, assessment_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def list_assessments(org_id: str) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:

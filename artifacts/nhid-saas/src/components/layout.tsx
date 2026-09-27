@@ -6,6 +6,7 @@ import {
   X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard, ShieldCheck, Zap, Settings2,
 } from "lucide-react";
 import { useApiKey } from "@/hooks/use-nhid";
+import { apiUrl } from "@/lib/config";
 
 const NHIDLogoMark = ({ size = 32 }: { size?: number }) => (
   <div
@@ -76,7 +77,7 @@ function useHealthStatus(enabled: boolean) {
     }
     const check = async () => {
       try {
-        const res = await fetch("/saas-api/health");
+        const res = await fetch(apiUrl("/health"));
         if (!res.ok) throw new Error();
         const data = await res.json();
         setStatus({

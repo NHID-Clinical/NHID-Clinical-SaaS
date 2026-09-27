@@ -1,9 +1,16 @@
 import { useState, useCallback } from "react";
 import { Link } from "wouter";
+import { API_BASE_URL, IS_CROSS_ORIGIN_API } from "@/lib/config";
 
-const BASE_URL = typeof window !== "undefined"
-  ? `${window.location.origin}/saas-api`
-  : "https://your-domain.replit.app/saas-api";
+// The base shown in the copy-paste SDK samples. It must be the URL a reader
+// can actually call, so it comes from the same config the app itself uses; a
+// relative base (local dev) is made absolute against the current origin, and
+// the placeholder host this used to fall back to is gone.
+const BASE_URL = IS_CROSS_ORIGIN_API
+  ? API_BASE_URL
+  : typeof window !== "undefined"
+    ? `${window.location.origin}${API_BASE_URL}`
+    : API_BASE_URL;
 
 const TEAL = "#00c2a8";
 const CYAN = "#53d8fb";

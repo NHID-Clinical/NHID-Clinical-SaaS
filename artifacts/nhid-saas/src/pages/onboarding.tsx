@@ -8,6 +8,7 @@ import { Copy, Check, Eye, EyeOff } from "lucide-react";
 import { useCreateOrg, useApiKey } from "@/hooks/use-nhid";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl } from "@/lib/config";
 
 const schema = z.object({
   orgName: z.string().min(2, "Organization name must be at least 2 characters.").max(120),
@@ -166,7 +167,7 @@ function SignInPanel({ onSuccess }: { onSuccess: () => void }) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/saas-api/saas/orgs/me", {
+      const res = await fetch(apiUrl("/saas/orgs/me"), {
         headers: { "X-API-Key": trimmed },
       });
       if (!res.ok) {

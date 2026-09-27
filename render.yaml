@@ -1,0 +1,91 @@
+# Render blueprint for the NHID-Clinical SaaS MVP.
+#
+# Two services: the FastAPI backend and the static frontend. The database is
+# NOT declared here -- it is a managed Postgres you create separately (Supabase
+# or Render Postgres) and whose connection string you paste into DATABASE_URL.
+# Declaring it here would put its lifecycle under this file, and a blueprint
+# edit should never be able to destroy the database.
+#
+# Every `sync: false` value below must be entered by hand in the Render
+# dashboard. That is deliberate: those are secrets, and nothing that belongs in
+# a secret store is committed to this repository.
+#
+# Apply with: Render Dashboard -> New -> Blueprint -> point at this repo.
+# See docs/DEPLOYMENT.md for the full procedure, including what to set and
+# in what order.
+
+services:
+  # ── API ────────────────────────────────────────────────────────────────────
+  - type: web
+    name: nhid-clinical-api
+    runtime: python
+    plan: starter          # free instances sleep, and a sleeping API looks broken
+    rootDir: nhid-clinical
+    buildCommand: pip install -r requirements.txt
+    # Migrations run as a release step, before any worker starts, so the schema
+    # is settled exactly once rather than raced by every booting worker.
+    preDeployCommand: python scripts/migrate.py
+    startCommand: uvicorn saas_main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Schema is applied by preDeployCommand above, so workers must not also
+      # issue DDL on import. See saas_layer/migrations.py.
+      - key: NHID_SKIP_SCHEMA_BOOTSTRAP
+        value: "1"
+      - key: APP_ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+      # --- secrets and deployment-specific values: set these in the dashboard ---
+      - key: DATABASE_URL          # Supabase connection string (pooled, sslmode=require)
+        sync: false
+      - key: HMAC_SECRET           # openssl rand -hex 32
+        sync: false
+      - key: ADMIN_PASS_HASH       # scripts/hash_admin_password.py
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS  # exact frontend origin(s), comma-separated
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+
+  # ── Frontend ───────────────────────────────────────────────────────────────
+  - type: web
+    name: nhid-clinical-app
+    runtime: static
+    rootDir: artifacts/nhid-saas
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist/public
+    envVars:
+      # Vite requires both at build time and fails the build without them.
+      # BASE_PATH is "/" here because this is a site root, not a project subpath
+      # the way GitHub Pages is.
+      - key: PORT
+        value: "3000"
+      - key: BASE_PATH
+        value: /
+      # The API origin, inlined into the bundle at build time. Not a secret --
+      # it is a public URL -- but it is deployment-specific, so it is set in the
+      # dashboard rather than hardcoded. Changing it requires a rebuild.
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      # The app is a single-page application: every unknown path must return
+      # index.html so client-side routing survives a reload or a deep link.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
