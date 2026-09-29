@@ -1592,6 +1592,26 @@
     }
   ],
   "metrics": {
+    "control_outcomes": {
+      "ATR-01": {
+        "pass": 9,
+        "unknown": 1
+      },
+      "EIT-01": {
+        "exception": 1,
+        "pass": 8,
+        "unknown": 1
+      },
+      "IDG-01": {
+        "exception": 3,
+        "not_assessable": 1,
+        "pass": 6
+      },
+      "PDX-01": {
+        "exception": 1,
+        "pass": 9
+      }
+    },
     "disclosure": {
       "denominator": 9,
       "disclosed": 8,
@@ -1669,6 +1689,26 @@
     ],
     "methodology": "Interactions supplied by the organisation were normalized to a single canonical shape, then evaluated against NHID-Clinical controls IDG-01 (identity disclosure), PDX-01 (protected-data sequencing), EIT-01 (escalation) and ATR-01 (audit record). Each control returns pass, exception, unknown or not assessable; 'unknown' is reported rather than resolved in either direction.",
     "metrics": {
+      "control_outcomes": {
+        "ATR-01": {
+          "pass": 9,
+          "unknown": 1
+        },
+        "EIT-01": {
+          "exception": 1,
+          "pass": 8,
+          "unknown": 1
+        },
+        "IDG-01": {
+          "exception": 3,
+          "not_assessable": 1,
+          "pass": 6
+        },
+        "PDX-01": {
+          "exception": 1,
+          "pass": 9
+        }
+      },
       "disclosure": {
         "denominator": 9,
         "disclosed": 8,

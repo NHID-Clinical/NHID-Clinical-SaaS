@@ -974,6 +974,24 @@ def compute_metrics(org_id: str, assessment_id: Optional[str] = None) -> Dict[st
             tuple(params),
         )
         review_minutes = float(cur.fetchone()["m"] or 0)
+
+        # Per-control outcome counts, aggregated here rather than derived by the
+        # caller. The breakdown exists per interaction in `evaluations`, so a
+        # client could assemble it -- but only by fetching every interaction's
+        # detail, which is one request per interaction. This is one GROUP BY.
+        # `evaluations` has no assessment_id of its own -- it hangs off the
+        # interaction -- so scoping by assessment joins through it.
+        cur.execute(
+            f"""SELECT e.control_id, e.result, COUNT(*) AS n
+                  FROM evaluations e
+                  JOIN interactions i ON i.interaction_id = e.interaction_id
+                 WHERE e.org_id=%s{extra.replace('assessment_id', 'i.assessment_id')}
+              GROUP BY e.control_id, e.result""",
+            tuple(params),
+        )
+        control_outcomes: Dict[str, Dict[str, int]] = {}
+        for row in cur.fetchall():
+            control_outcomes.setdefault(row["control_id"], {})[row["result"]] = row["n"]
     finally:
         conn.close()
 
@@ -983,6 +1001,10 @@ def compute_metrics(org_id: str, assessment_id: Optional[str] = None) -> Dict[st
     return {
         "interactions_analyzed": total,
         "interactions_evaluated": len(evaluated),
+        # {control_id: {result: count}} over the four result states. Absent
+        # states are absent rather than zero-filled: a control that never
+        # returned `not_assessable` should not claim a measured zero for it.
+        "control_outcomes": control_outcomes,
         "non_human_interactions": len(non_human),
         "non_human_denominator": len(evaluated),
         "disclosure": {

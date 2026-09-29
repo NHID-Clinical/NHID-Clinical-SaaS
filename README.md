@@ -1,227 +1,170 @@
+<div align="center">
+
 # NHID-Clinical SaaS
 
-**A healthcare voice-AI governance monitoring and evidence platform.**
+**Governance monitoring and audit evidence for healthcare voice-AI interactions.**
 
-It monitors healthcare voice-AI interactions an organization *already receives*
-against the [NHID-Clinical](https://github.com/NHID-Clinical/NHID-Clinical)
-controls, and gives it the evidence and workflow to investigate what happened.
-Nothing in production changes, no provider has to issue a credential, and no
-vendor has to integrate.
+Ingest the calls you already receive. Evaluate them against five deterministic controls.
+Keep the evidence for what happened.
 
-> **BUSINESS HYPOTHESIS — NEEDS CUSTOMER VALIDATION.**
-> There are **zero deployments, zero pilots and zero validated
-> willingness-to-pay**. The buyer, the workflow and the pricing are hypotheses.
-> Nothing in this repository, the application or its UI may be presented to
-> anyone as evidence of demand.
+[![CI](https://github.com/NHID-Clinical/NHID-Clinical-SaaS/actions/workflows/ci.yml/badge.svg)](https://github.com/NHID-Clinical/NHID-Clinical-SaaS/actions)
+![Tests](https://img.shields.io/badge/tests-373%20passing-0e7a57?style=flat-square)
+![Python](https://img.shields.io/badge/python-3.11-1b5e9c?style=flat-square)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.141-1b5e9c?style=flat-square)
+![React](https://img.shields.io/badge/React%2018-TypeScript-53d8fb?style=flat-square)
+![Postgres](https://img.shields.io/badge/PostgreSQL-16-1b5e9c?style=flat-square)
+![Deployments](https://img.shields.io/badge/production%20deployments-0-94a3b8?style=flat-square)
 
-## The loop
+[Framework](https://github.com/NHID-Clinical/NHID-Clinical) ·
+[Deployment guide](docs/DEPLOYMENT.md) ·
+[Product notes](docs/MONITORING_PRODUCT.md)
 
+</div>
+
+![The Governance Ops overview: eleven metrics with stated denominators, per-control outcomes, and findings by category](docs/images/ops-overview.png)
+
+<div align="center"><sub>Governance Ops overview, running the recorded demonstration set. Every figure carries its denominator.</sub></div>
+
+---
+
+> [!IMPORTANT]
+> **Zero deployments. Zero pilots. Zero validated willingness-to-pay.**
+> The buyer, the workflow and the pricing are hypotheses. Nothing in this
+> repository or its UI may be shown to anyone as evidence of demand. The
+> engineering is real and tested; the business is not yet a business.
+
+## What it does
+
+```mermaid
+flowchart LR
+  A[Transcripts<br/>event exports] --> B[Normalize]
+  B --> C[Evaluate]
+  C --> D[(Postgres)]
+  C --> E[Findings]
+  E --> F[Review queue]
+  F --> G[Report]
+  D -.evidence.-> G
+  style C fill:#0e7a57,color:#fff
+  style E fill:#a8271a,color:#fff
+  style D fill:#1b5e9c,color:#fff
 ```
-Ingest → Normalize → Evaluate → Monitor → Investigate → Review → Report
+
+Nothing in production changes. No provider issues a credential, no vendor integrates.
+You upload what you already have.
+
+| Stage | Where |
+|---|---|
+| **Ingest** | `POST /saas/monitor/ingest` — bounded to 500 interactions / 10 MiB |
+| **Normalize** | `saas_layer/normalization.py` — one canonical shape from `generic`, `twilio`, `vapi` |
+| **Evaluate** | `saas_layer/monitoring.py` — the real engine, deterministic |
+| **Investigate** | Transcript, per-control result, and the reason for each |
+| **Review** | `open → under review → resolved` |
+| **Report** | `GET /saas/monitor/assessments/{id}/report` |
+
+## Four result states — and why two of them matter
+
+| State | Meaning |
+|:--|:--|
+| 🟢 `pass` | The control was satisfied |
+| 🔴 `exception` | The control was violated |
+| 🟡 `unknown` | Evidence ran out before a verdict could be reached |
+| ⬜ `not_assessable` | The interaction cannot support this control at all |
+
+Most governance dashboards have two states and quietly round the hard cases into
+one of them. If a caller asks for a human and the recording ends, completion was
+neither observed nor refused — reporting that as a pass is fiction, and reporting
+it as a failure is slander. It gets `unknown`.
+
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph browser [Browser]
+    UI[React 18 · TypeScript · Vite<br/>22 screens]
+  end
+  subgraph api [FastAPI gateway]
+    AUTH[API key · SHA-256<br/>per-org scoping]
+    MON[monitoring.py<br/>evaluation engine]
+    AUD[audit.py<br/>HMAC-SHA256 chain]
+    ADM[admin console<br/>scrypt · throttled]
+  end
+  DB[(PostgreSQL 16<br/>17 tables · migrated)]
+  UI -->|VITE_API_BASE_URL| AUTH
+  AUTH --> MON --> DB
+  MON --> AUD --> DB
+  ADM --> DB
+  style MON fill:#0e7a57,color:#fff
+  style DB fill:#1b5e9c,color:#fff
 ```
 
-| Step | Where |
-|---|---|
-| Ingest | `POST /saas/monitor/ingest` — transcripts or event exports |
-| Normalize | `saas_layer/normalization.py` — one canonical shape; `generic`, `twilio`, `vapi` |
-| Evaluate | `saas_layer/monitoring.py` — **IDG-01, PDX-01, EIT-01, ATR-01** |
-| Monitor | `GET /saas/monitor/metrics`, the Overview screen |
-| Investigate | Interaction detail: transcript, per-control result, the reason for each |
-| Review | Findings queue: open → under review → resolved |
-| Report | `GET /saas/monitor/assessments/{id}/report` |
+**Multi-tenant by construction.** Every org-scoped query takes its `org_id` from the
+authenticated key, never from the request body. `tests/test_workspace_isolation.py`
+proves it empirically — it creates two organizations, gives one real evaluated data,
+and tries to reach it with the other's key on every route that accepts an identifier.
 
-A control returns one of four results: `pass`, `exception`, `unknown` or
-`not_assessable`. `unknown` exists because forcing a binary verdict onto an
-interaction that cannot support one is how a governance record becomes fiction —
-if a human asks for a person and the recording ends, completion was neither
-observed nor refused. See [`docs/MONITORING_PRODUCT.md`](docs/MONITORING_PRODUCT.md)
-for the full product description, the free-vs-commercial boundary, local setup
-and the demo path.
+## Run it locally
 
-**DBC-01 is not part of the monitoring product.** It is evaluated by the older
-real-time voice-webhook path (`saas_layer/voice_policy.py`), not by
-`monitoring.py`.
-
-## Evidence and limitations
-
-The same limits that bound the framework bound this product, because it runs the
-framework's controls over the same kind of evidence.
-
-- **It evaluates transcript and event evidence.** A disclosure that was spoken
-  but mis-transcribed reads as a missing disclosure. An escalation request that
-  was mis-transcribed produces **no finding at all**, and the record then
-  attests to a compliant interaction — the one failure mode the evidence cannot
-  reveal on its own.
-- **Transcription accuracy is not established here.** The product performs no
-  speech recognition and does not independently establish ASR accuracy. Every
-  interaction carries an attestation of `measured`, `attested` or `unattested`,
-  and an unattested one raises a finding rather than being quietly treated as
-  fine. Assuring transcription quality, including across speaker groups, is the
-  deploying organization's job.
-- **Population-level fairness stratification is not implemented.** `language`
-  and `interpreter_present` are recorded so an organization can run its own
-  reporting; nothing here stratifies.
-- **No score.** No composite, no tier, no grade. The former Call Authorization
-  Score, its "Verified Trust" / "Conditional Trust" tiers and its badges are
-  withdrawn, and nothing reintroduces them under another name.
-- **Not a certification**, not a compliance badge, not a clinical safety
-  validation system, and not a universal measure of AI safety. Findings are
-  *governance exceptions*, not regulatory violations. Standards work is
-  **mapped, not certified**.
-- **Impersonation Latency** measures the elapsed time between interaction start
-  and the point at which a non-human actor discloses its non-human identity to
-  the human recipient. It measures disclosure timing. It does *not* determine
-  that impersonation occurred, determine intent, detect an impersonator, prevent
-  impersonation, establish authentication, or establish authorization.
-
-All demonstration records are flagged `is_synthetic` in the database, in the UI
-and in the report. They are not customer data, not observed traffic and not a
-pilot.
-
-The dashboard is published to GitHub Pages by `.github/workflows/pages.yml`.
-What it shows is a **recorded demonstration**: with no backend reachable, the
-Governance Ops screens replay output the real evaluator produced over ten
-authored interactions, and every screen says so. Publishing that page is not a
-deployment in the sense the notice above disclaims — there is still no
-organization running this against traffic of its own. See
-[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
-
-## Related repositories
-
-| Repository | What it is |
-|---|---|
-| **[NHID-Clinical](https://github.com/NHID-Clinical/NHID-Clinical)** | The open framework: controls, the deterministic engine, the conformance suite, the event schema, the shadow-evaluation method. Free, and the governance verdict is never paywalled. |
-| **NHID-Clinical-SaaS** (this one) | The commercial product above. What is paid for is the cost of *running a service* — hosted ingestion at volume, cross-vendor normalization, retained evidence with access control, the findings workflow, dashboards and reporting — never a capability withheld from the framework to force a sale. |
-| **[Simulator](https://github.com/NHID-Clinical/Simulator)** | A teaching site that walks through the controls interactively. Not the framework, not this product, not a certification. |
-
-`nhid-clinical/` in this repository is the SaaS backend. It vendors a snapshot
-of the framework engine (`nhid-clinical/src/`) alongside `saas_layer/`; the
-framework repository is the source of truth for the controls themselves.
-
-## Current status
-
-NHID-Clinical SaaS is an active development repository.
-
-Implemented areas include:
-
-- the monitoring and evidence product above — assessments, ingestion,
-  normalization, per-control evaluation, findings workflow, reviewer time
-  capture, metrics and reporting (`saas_layer/monitoring.py`,
-  `saas_layer/normalization.py`, the `/saas/monitor/*` endpoints, and the
-  Governance Ops screens in `artifacts/nhid-saas`)
-- organization and API-key management, with keys **hashed at rest**
-  (`saas_layer/api_keys.py`): the database stores a SHA-256 of the key and a
-  short non-secret prefix, never the key, so a dump or a logged row yields
-  nothing replayable. A lost key is replaced via `POST /saas/orgs/rotate-key`
-  rather than re-read
-- Stripe billing integration
-- voice webhook ingestion (Retell, Vapi, Twilio, generic)
-- transcript disclosure-policy evaluation
-- audit-chain generation and verification (HMAC-SHA256, constant-time)
-- provider-signed agent authorization (Ed25519 delegation with NPI binding,
-  agent co-signature, call-SID replay binding, and durable revocation)
-- internal operations tooling
-
-Agent authorization is integrated into the runtime path: an agent may present a
-provider-signed delegation, the gateway verifies it against a public key the
-organization registered for the NPI being claimed, and the verdict is enforced
-by the `REQUIRE_AGENT_AUTHORIZATION` policy rule on every turn.
-
-It ships **permissive by default** (`required: false`): a call presenting no
-credential is allowed through, while a credential that fails verification is
-denied. Refusing unauthenticated agents outright is a per-organization opt-in,
-because enabling it stops calls. See `docs/AGENT_AUTHORIZATION.md` for what a
-verified passport does and does not prove, and for the operator runbook.
-
-Before commercial deployment, the project requires:
-
-- credential hardening
-- CI enforcement
-- backend and frontend consolidation
-- webhook **signature** verification — provider-signed payloads from Vapi,
-  Retell and Twilio are not yet verified. (API-key *authentication* on those
-  endpoints is done: `saas_layer/webhook_auth.py` requires the
-  `X-NHID-API-Key` header and only tolerates `?api_key=` for existing
-  registrations, with a deprecation warning.)
-- tenant-isolation testing
-- NPPES validation of registered NPIs (format is checked; the number is not
-  looked up)
-- delegation-chain support through the gateway (implemented in the framework,
-  not yet exposed)
-- PHI handling and retention controls
-- deployment validation
-- threat-model validation
-
-**This repository should not currently be represented as production-ready or
-HIPAA-compliant.**
-
-## Architecture terminology
-
-- `nhid-clinical/saas_layer/gateway.py` is the **current SaaS control-plane
-  backend**.
-- `artifacts/nhid-saas` is the **customer-facing frontend**.
-- `artifacts/api-server` is a **deprecated authentication scaffold**. It
-  contains no product endpoints and is not the API.
-- `artifacts/nhid-clinical-operations` is **internal operations and testing
-  tooling**. It is not customer-facing and must not become a second backend.
-- `artifacts/nhid-audit-core` is a **superseded standalone audit service**,
-  retained pending removal. `saas_layer/audit.py` is the audit implementation
-  in use.
-
-## Further documentation
-
-| Document | Contents |
-|---|---|
-| `docs/DEPLOYMENT.md` | How the dashboard is published to GitHub Pages, why the published build shows a recorded demonstration, and why it cannot show live data |
-| `docs/CONSOLIDATION_CANDIDATES.md` | Packages proposed for retirement — **nothing deleted yet** |
-| `docs/POLICY_ENGINE_RECONCILIATION.md` | The Python and TypeScript control implementations compared |
-| `docs/MONITORING_PRODUCT.md` | **The commercial product**: the loop, the four result states, the ASR dependency, the free-vs-commercial boundary, local setup, the demo path |
-| `docs/AGENT_AUTHORIZATION.md` | What a verified passport does and does not prove, and the operator runbook |
-| `docs/trustlayer-module-architecture.md` | Module map from the public platform pages to code |
-
-## Running the tests
-
-Python (requires a live PostgreSQL — the gateway reads `DATABASE_URL` at import
-time, so the suite cannot collect without one):
+<details>
+<summary><b>Three processes: Postgres, the API, the frontend</b></summary>
 
 ```bash
-cd nhid-clinical
-export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/nhid_dev
-export HMAC_SECRET=<any-value-for-local-use>
-export ADMIN_PASS=<any-value-for-local-use>
-python scripts/check_startup.py     # required config + module imports
-python -m pytest tests/ -q
+# 1 — schema
+export DATABASE_URL="postgresql://localhost:5432/nhid_saas"
+export HMAC_SECRET="dev-only-not-a-real-secret"
+export ADMIN_PASS="dev-only-admin-password"
+cd nhid-clinical && python scripts/migrate.py
+
+# 2 — API on :8010
+uvicorn saas_main:app --host 127.0.0.1 --port 8010
+
+# 3 — frontend on :3000, proxying /saas-api → :8010
+cd artifacts/nhid-saas && PORT=3000 BASE_PATH=/ npm run dev
 ```
 
-TypeScript:
+Then open `http://localhost:3000/ops`. With no API key connected it replays the
+recorded demonstration set; connect one to evaluate your own interactions.
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm run typecheck
-pnpm -C artifacts/nhid-clinical-operations run test
-PORT=3000 BASE_PATH=/ pnpm -C artifacts/nhid-saas run build
+python -m pytest tests/ -q      # 373 passed, 18 skipped
+python scripts/migrate.py --status
 ```
+</details>
 
-Both are run on every pull request by `.github/workflows/ci.yml`.
+<details>
+<summary><b>Deploy it</b> — Render + Supabase</summary>
 
-## Required configuration
+`render.yaml` describes both services. The full procedure — Supabase pooler URI,
+migrations as a release step, the initial administrator, CORS, Stripe webhooks,
+a ten-step smoke test — is in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
-The gateway refuses to start unless these are set. There are no defaults.
+Nothing is deployed today. That document is the procedure, not a record.
+</details>
 
-| Variable | Purpose |
+## What's actually verified
+
+| | |
 |---|---|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `HMAC_SECRET` | Audit-chain signing secret |
-| `ADMIN_PASS_HASH` *(preferred)* or `ADMIN_PASS` | Admin credential |
-| `STRIPE_WEBHOOK_SECRET` | Required to process Stripe webhooks; without it they are rejected |
+| **373 passed, 18 skipped** | on a live Postgres, and again on a database built only by `scripts/migrate.py` |
+| **Workspace isolation** | 15 tests; found and fixed a real cross-org write bug |
+| **Admin surface** | 31 tests; every route refuses an unauthenticated and a fabricated token |
+| **Migrations** | applied to an empty database in CI, asserted to actually apply |
+| **Recorded demo** | regenerated from the real engine; CI fails if the two disagree |
 
-Generate an admin password hash with:
+## Limits — stated, not buried
 
-```bash
-python -c "from saas_layer.admin_auth import hash_password; print(hash_password('...'))"
-```
+- **It reads transcripts and events.** A disclosure that was spoken but never
+  transcribed is invisible to it. It does not establish transcription accuracy;
+  where an attestation is missing, it says so rather than assuming.
+- **`DBC-01` is not in this product.** It belongs to the older real-time
+  voice-webhook path, not `monitoring.py`.
+- **Not HIPAA compliant.** Using auth, TLS and a managed database does not make a
+  deployment compliant — that is a property of an organization and its agreements,
+  not of software. Synthetic and test data only until a deployment has been
+  separately validated.
+- **No user accounts.** Authentication is organization-scoped API keys, hashed at
+  rest. No password reset, no per-user identity inside an org.
 
-Webhook authentication uses the `X-NHID-API-Key` header. The `?api_key=` query
-parameter still works for existing provider registrations but is deprecated —
-query strings are captured by access logs and proxies — and will be removed
-after the migration window.
+## Licence
+
+Apache-2.0 (code) · CC BY 4.0 (specification and docs) · Built by
+[Brianna Baynard](https://github.com/thankcheeses)

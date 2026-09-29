@@ -112,6 +112,15 @@ export interface InteractionDetail extends InteractionRow {
 export interface Metrics {
   interactions_analyzed: number;
   interactions_evaluated: number;
+  /**
+   * Per-control outcome counts, `{control_id: {result: count}}`.
+   *
+   * Optional because a response from an older gateway will not carry it — the
+   * screens degrade to omitting the chart rather than rendering an empty one.
+   * Absent result states are absent rather than zero: a control that never
+   * returned `not_assessable` should not report a measured zero for it.
+   */
+  control_outcomes?: Record<string, Partial<Record<ControlResult, number>>>;
   non_human_interactions: number;
   non_human_denominator: number;
   disclosure: { disclosed: number; denominator: number; rate: number | null };

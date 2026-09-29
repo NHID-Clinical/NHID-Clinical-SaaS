@@ -13,6 +13,7 @@ import { ReactNode } from "react";
 import { Link } from "wouter";
 import { useApiKey } from "@/hooks/use-nhid";
 import { DEMO_API_KEY, isDemoKey } from "@/lib/monitoring-api";
+import { CHART_CSS } from "./ops-charts";
 
 export const OPS_CSS = `
 .ops {
@@ -45,14 +46,30 @@ export const OPS_CSS = `
 .ops .sub { color: var(--ops-muted); font-size: 13px; margin-bottom: 20px; }
 .ops .card {
   background: var(--ops-surface); border: 1px solid var(--ops-border);
-  border-radius: 6px; padding: 16px; margin-bottom: 16px;
+  border-radius: 10px; padding: 18px 20px; margin-bottom: 16px;
+  box-shadow: 0 1px 2px rgba(16,32,56,0.04);
 }
 .ops .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
-.ops .metric { background: var(--ops-surface); border: 1px solid var(--ops-border);
-  border-radius: 6px; padding: 14px 16px; }
-.ops .metric .label { font-size: 12px; color: var(--ops-muted); text-transform: uppercase;
-  letter-spacing: 0.04em; margin-bottom: 6px; }
-.ops .metric .value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ops .metric {
+  position: relative; background: var(--ops-surface);
+  border: 1px solid var(--ops-border); border-radius: 10px; padding: 15px 16px 14px;
+  box-shadow: 0 1px 2px rgba(16,32,56,0.04);
+  transition: box-shadow 140ms ease, transform 140ms ease;
+}
+/* A teal rule along the top edge, tying the light content area back to the
+   brand colour that owns the sidebar. Purely decorative: it encodes nothing,
+   so it is identical on every tile. */
+.ops .metric::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
+  border-radius: 10px 10px 0 0;
+  background: linear-gradient(90deg, #00c2a8, #53d8fb);
+  opacity: 0.85;
+}
+.ops .metric:hover { box-shadow: 0 3px 10px rgba(16,32,56,0.08); transform: translateY(-1px); }
+.ops .metric .label { font-size: 11px; color: var(--ops-muted); text-transform: uppercase;
+  letter-spacing: 0.06em; margin-bottom: 7px; font-weight: 600; }
+.ops .metric .value { font-size: 27px; font-weight: 650; font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em; line-height: 1.15; }
 .ops .metric .denom { font-size: 12px; color: var(--ops-faint); margin-top: 4px;
   font-variant-numeric: tabular-nums; }
 .ops table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -85,8 +102,13 @@ export const OPS_CSS = `
   border-bottom: 2px solid transparent; }
 .ops .nav a.active { color: var(--ops-blue); border-bottom-color: var(--ops-blue); font-weight: 600; }
 .ops .notice { background: var(--ops-unknown-soft); border: 1px solid #e8d9a8;
-  border-radius: 6px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px;
-  color: #6b5514; }
+  border-left: 3px solid #c99a1e;
+  border-radius: 8px; padding: 11px 15px; font-size: 13px; margin-bottom: 16px;
+  color: #6b5514; line-height: 1.55; }
+/* The standing demo banner is a condition of the whole session, not an alert
+   about the page, so it is quieter than a finding-level notice. */
+.ops .notice-demo { background: #f4f7fb; border-color: #dbe4ee;
+  border-left-color: var(--ops-blue); color: #2c4a63; }
 .ops .transcript { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
 .ops .turn { display: grid; grid-template-columns: 74px 56px 1fr; gap: 10px;
   padding: 7px 0; border-bottom: 1px solid #eef0f3; }
@@ -114,7 +136,7 @@ export function OpsShell({
 }: { title: string; subtitle?: string; active: string; children: ReactNode }) {
   return (
     <div className="ops">
-      <style>{OPS_CSS}</style>
+      <style>{OPS_CSS}{CHART_CSS}</style>
       <h1>{title}</h1>
       {subtitle && <div className="sub">{subtitle}</div>}
       <nav className="nav">
@@ -142,13 +164,11 @@ export function DemoNotice() {
   const apiKey = useApiKey();
   if (!isDemoKey(apiKey ?? DEMO_API_KEY)) return null;
   return (
-    <div className="notice" style={{ marginBottom: 16 }}>
-      <strong>Recorded demonstration.</strong> No organization key is connected,
-      so these screens are replaying <strong>10 synthetic interactions</strong>{" "}
-      through output the real evaluator produced — not observed traffic, not
-      customer data, and not a pilot. This product has zero deployments. Writing
-      is disabled; connect an API key to ingest and evaluate your own
-      interactions.
+    <div className="notice notice-demo">
+      <strong>Recorded demonstration</strong> · <strong>10 synthetic interactions</strong>,
+      replayed from output the real evaluator produced. Not observed traffic, not customer
+      data, not a pilot — this product has zero deployments. Writing is disabled; connect an
+      API key to evaluate your own interactions.
     </div>
   );
 }
@@ -197,9 +217,17 @@ export function AttestationPill({ status, wer }: { status: string; wer?: number 
   );
 }
 
-/** Shown wherever a reader might mistake demo data for observed traffic. */
+/** Shown wherever a reader might mistake demo data for observed traffic.
+ *
+ * Silent in demo mode, where `DemoNotice` is already on screen saying the same
+ * thing in more detail — two stacked banners making one point read as an
+ * unfinished page rather than a careful one. It still fires for a real
+ * organization whose workspace contains synthetic rows, which is the case the
+ * warning actually exists for and the only case where it is the sole disclosure.
+ */
 export function SyntheticNotice({ count }: { count: number }) {
-  if (!count) return null;
+  const apiKey = useApiKey();
+  if (!count || isDemoKey(apiKey ?? DEMO_API_KEY)) return null;
   return (
     <div className="notice">
       <strong>{count}</strong> record{count === 1 ? " is" : "s are"} synthetic demonstration
