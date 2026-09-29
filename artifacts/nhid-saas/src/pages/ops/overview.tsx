@@ -11,6 +11,7 @@ import { Link } from "wouter";
 import { useOpsKey } from "@/hooks/use-nhid";
 import { monitorApi, fmtPct, CATEGORY_LABEL } from "@/lib/monitoring-api";
 import { OpsShell, Metric, SyntheticNotice } from "./ops-ui";
+import { ControlOutcomes, FindingsByCategory } from "./ops-charts";
 
 export default function OpsOverview() {
   const apiKey = useOpsKey();
@@ -117,23 +118,19 @@ export default function OpsOverview() {
         </div>
       )}
 
+      {metrics.control_outcomes && Object.keys(metrics.control_outcomes).length > 0 && (
+        <div className="card">
+          <ControlOutcomes outcomes={metrics.control_outcomes} />
+        </div>
+      )}
+
       {Object.keys(metrics.findings.by_category).length > 0 && (
         <div className="card">
-          <h2>Findings by category</h2>
-          <table>
-            <thead><tr><th>Category</th><th style={{ width: 90 }}>Count</th><th /></tr></thead>
-            <tbody>
-              {Object.entries(metrics.findings.by_category)
-                .sort((a, b) => b[1] - a[1])
-                .map(([cat, n]) => (
-                  <tr key={cat}>
-                    <td>{CATEGORY_LABEL[cat] ?? cat}</td>
-                    <td>{n}</td>
-                    <td><Link href={`/ops/findings?category=${cat}`}>Review</Link></td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+          <FindingsByCategory
+            byCategory={metrics.findings.by_category}
+            labelFor={(k) => CATEGORY_LABEL[k]}
+            hrefFor={(k) => `/ops/findings?category=${k}`}
+          />
         </div>
       )}
     </OpsShell>
