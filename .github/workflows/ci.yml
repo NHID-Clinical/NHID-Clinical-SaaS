@@ -68,9 +68,15 @@ jobs:
         # testing. The grep below asserts that it really applied, so the step
         # fails loudly if the ordering regresses rather than quietly going
         # back to proving nothing.
+        #
+        # The grep counts nothing in particular on purpose. Pinning it to an
+        # exact number means every new migration has to remember to bump it,
+        # and the failure mode of forgetting is a red build that looks like a
+        # migration bug -- or worse, someone "fixing" it by loosening the
+        # check. What matters is that at least one was applied.
         run: |
           python scripts/migrate.py | tee /tmp/migrate.out
-          grep -q "Applied 1 migration" /tmp/migrate.out || {
+          grep -qE "Applied [0-9]+ migration" /tmp/migrate.out || {
             echo "::error::migrate.py applied nothing — the schema already existed, so this step is not testing a fresh-database migration. Check the step ordering."
             exit 1
           }
@@ -107,6 +113,27 @@ jobs:
             exit 1
           fi
           echo "Confirmed: production startup is refused without CORS_ALLOWED_ORIGINS."
+
+      - name: Refuse to start in production without an email sender
+        working-directory: nhid-clinical
+        # Regression guard, same class as the two above. A production
+        # deployment that cannot send mail accepts every sign-in request,
+        # answers 202, delivers nothing, and locks every user out with no
+        # error anywhere -- so it must abort rather than look healthy.
+        #
+        # CORS_ALLOWED_ORIGINS is set here so that the CORS check passes and
+        # this step is actually exercising the email check rather than
+        # re-testing the previous one.
+        run: |
+          if APP_ENV=production CORS_ALLOWED_ORIGINS=https://example.org EMAIL_BACKEND= python -c "
+          import saas_layer.gateway as g
+          import asyncio
+          asyncio.run(g._lifespan(g.app).__aenter__())
+          "; then
+            echo "::error::Startup succeeded in production with no email sender configured. Sign-in links would go nowhere."
+            exit 1
+          fi
+          echo "Confirmed: production startup is refused without an email sender."
 
       - name: Run tests
         working-directory: nhid-clinical

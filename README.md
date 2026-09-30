@@ -8,7 +8,7 @@ Ingest the calls you already receive. Evaluate them against five deterministic c
 Keep the evidence for what happened.
 
 [![CI](https://github.com/NHID-Clinical/NHID-Clinical-SaaS/actions/workflows/ci.yml/badge.svg)](https://github.com/NHID-Clinical/NHID-Clinical-SaaS/actions)
-![Tests](https://img.shields.io/badge/tests-373%20passing-0e7a57?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-403%20passing-0e7a57?style=flat-square)
 ![Python](https://img.shields.io/badge/python-3.11-1b5e9c?style=flat-square)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-1b5e9c?style=flat-square)
 ![React](https://img.shields.io/badge/React%2018-TypeScript-53d8fb?style=flat-square)
@@ -58,7 +58,7 @@ You upload what you already have.
 | **Normalize** | `saas_layer/normalization.py` — one canonical shape from `generic`, `twilio`, `vapi` |
 | **Evaluate** | `saas_layer/monitoring.py` — the real engine, deterministic |
 | **Investigate** | Transcript, per-control result, and the reason for each |
-| **Review** | `open → under review → resolved` |
+| **Review** | `open → under review → resolved`, signed by the person who decided |
 | **Report** | `GET /saas/monitor/assessments/{id}/report` |
 
 ## Four result states — and why two of them matter
@@ -83,7 +83,7 @@ flowchart TB
     UI[React 18 · TypeScript · Vite<br/>22 screens]
   end
   subgraph api [FastAPI gateway]
-    AUTH[API key · SHA-256<br/>per-org scoping]
+    AUTH[API key · SHA-256<br/>magic-link session<br/>per-org scoping]
     MON[monitoring.py<br/>evaluation engine]
     AUD[audit.py<br/>HMAC-SHA256 chain]
     ADM[admin console<br/>scrypt · throttled]
@@ -96,6 +96,25 @@ flowchart TB
   style MON fill:#0e7a57,color:#fff
   style DB fill:#1b5e9c,color:#fff
 ```
+
+## Two credentials, because a pipeline is not a person
+
+| | credential | used by |
+|---|---|---|
+| **machine** | organization API key, SHA-256 at rest | ingest pipelines, scripts, CI |
+| **human** | magic-link session, httpOnly cookie | people opening `/ops` in a browser |
+
+The key is what a vendor's exporter authenticates with. The session exists for a
+narrower reason: **so a review decision carries a name.** `review_events.reviewer`
+used to be free text the client supplied, defaulting to the literal string
+`"unknown"` — so a product built to answer *who did this, under whose authority*
+could not answer it about its own users. It now records the authenticated user,
+ignores any reviewer the request body claims, and marks an API-key action as
+an unattributed machine action rather than as a nameless person.
+
+No passwords: a link to a verified mailbox proves the same thing without a
+stored secret, a reset flow, or a reuse liability inherited from every other
+site the person has an account on.
 
 **Multi-tenant by construction.** Every org-scoped query takes its `org_id` from the
 authenticated key, never from the request body. `tests/test_workspace_isolation.py`
@@ -125,7 +144,7 @@ Then open `http://localhost:3000/ops`. With no API key connected it replays the
 recorded demonstration set; connect one to evaluate your own interactions.
 
 ```bash
-python -m pytest tests/ -q      # 373 passed, 18 skipped
+python -m pytest tests/ -q      # 403 passed, 18 skipped
 python scripts/migrate.py --status
 ```
 </details>
@@ -144,9 +163,10 @@ Nothing is deployed today. That document is the procedure, not a record.
 
 | | |
 |---|---|
-| **373 passed, 18 skipped** | on a live Postgres, and again on a database built only by `scripts/migrate.py` |
+| **403 passed, 18 skipped** | on a live Postgres, and again on a database built only by `scripts/migrate.py` |
 | **Workspace isolation** | 15 tests; found and fixed a real cross-org write bug |
 | **Admin surface** | 31 tests; every route refuses an unauthenticated and a fabricated token |
+| **Sign-in** | 30 tests; single-use links, no email enumeration, and a name on every review |
 | **Migrations** | applied to an empty database in CI, asserted to actually apply |
 | **Recorded demo** | regenerated from the real engine; CI fails if the two disagree |
 
@@ -161,8 +181,9 @@ Nothing is deployed today. That document is the procedure, not a record.
   deployment compliant — that is a property of an organization and its agreements,
   not of software. Synthetic and test data only until a deployment has been
   separately validated.
-- **No user accounts.** Authentication is organization-scoped API keys, hashed at
-  rest. No password reset, no per-user identity inside an org.
+- **No passwords, no SSO.** People sign in with a link to their mailbox; there
+  is no self-service sign-up, and roles stop at `owner` / `member`. SAML, SCIM
+  and per-user API keys are not here.
 
 ## Licence
 

@@ -44,7 +44,7 @@ _CLINICAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _CLINICAL_DIR not in sys.path:
     sys.path.insert(0, _CLINICAL_DIR)
 
-from fastapi import FastAPI, HTTPException, Header, Request, Depends, Query
+from fastapi import Cookie, FastAPI, HTTPException, Header, Request, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
@@ -93,6 +93,8 @@ from saas_layer.voice_sessions import (
 )
 from saas_layer import agent_authorization, agent_registry
 from saas_layer import monitoring, normalization
+from saas_layer import email as email_svc
+from saas_layer import user_auth
 from saas_layer.db import get_conn
 
 # NHID core is accessed via direct Python import (no Bridge HTTP dependency).
@@ -173,6 +175,12 @@ async def _lifespan(app: FastAPI):
             "https://app.nhid-clinical.org"
         )
     _logger.info("CORS: %d allowed origin(s) configured", len(_cors_origins()))
+
+    # Same reasoning as the two checks above, applied to the thing that
+    # delivers sign-in links: a deployment that cannot send mail accepts every
+    # sign-in request, answers 202, and locks every user out with no error
+    # anywhere. Startup is the last cheap moment to notice.
+    email_svc.verify_configured(production=_is_production())
 
     task = asyncio.create_task(_voice_session_cleanup_loop())
     try:
@@ -308,6 +316,92 @@ def get_current_org(x_api_key: Optional[str] = Header(default=None)) -> Dict[str
         raise HTTPException(status_code=403, detail="Invalid or inactive API key")
     return org
 
+
+
+# The cookie carrying a human session. Named with a `__Host-`-style intent but
+# without the prefix: `__Host-` forbids a Domain attribute, and the target
+# deployment serves the app from `app.` and the API from `api.`, so the cookie
+# must be scoped to the shared parent domain to be sent at all.
+SESSION_COOKIE = "nhid_session"
+
+
+def _session_cookie_domain() -> Optional[str]:
+    """Parent domain the session cookie is scoped to, or None for host-only.
+
+    Unset in development, where the frontend proxies /saas-api to the same
+    origin and a host-only cookie is both correct and simpler.
+    """
+    value = (os.environ.get("SESSION_COOKIE_DOMAIN") or "").strip()
+    return value or None
+
+
+def set_session_cookie(response: Response, raw_session: str) -> None:
+    """Attach the session cookie.
+
+    httpOnly so that script cannot read it, which is the property the previous
+    `localStorage` API key never had. Secure outside development. SameSite=Lax
+    rather than None: the mutating routes are all POST/PATCH with JSON bodies
+    from the app's own origin, which Lax plus the CORS allowlist covers, and
+    None would opt this cookie into every cross-site POST on the internet.
+
+    Stating the tradeoff plainly: moving from localStorage to a cookie trades
+    XSS exposure for CSRF exposure. Lax is what closes the second, and it is
+    load-bearing, not incidental.
+    """
+    response.set_cookie(
+        SESSION_COOKIE,
+        raw_session,
+        max_age=user_auth.SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=_is_production(),
+        samesite="lax",
+        domain=_session_cookie_domain(),
+        path="/",
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        SESSION_COOKIE, domain=_session_cookie_domain(), path="/")
+
+
+def current_user_optional(
+    nhid_session: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> Optional[Dict[str, Any]]:
+    """The signed-in user, or None. Never raises — callers decide."""
+    if not nhid_session:
+        return None
+    return user_auth.resolve_session(nhid_session)
+
+
+def current_user(
+    user: Optional[Dict[str, Any]] = Depends(current_user_optional),
+) -> Dict[str, Any]:
+    """The signed-in user. 401 when there is none."""
+    if user is None:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    return user
+
+
+def org_for_request(
+    org: Dict[str, Any] = Depends(get_current_org),
+    user: Optional[Dict[str, Any]] = Depends(current_user_optional),
+) -> Dict[str, Any]:
+    """Resolve the org from the API key, and attach the user when one is present.
+
+    The org still comes from the credential, never from the body: a session
+    does not widen what an API key can reach. What it adds is a name to put on
+    whatever the request does -- but only if that user is actually a member of
+    this org. A session for org B presented alongside org A's key attributes
+    nothing; it does not become an error either, because the API key already
+    authorized the request and refusing it would break every machine caller
+    that happens to carry a stale cookie.
+    """
+    resolved = dict(org)
+    if user is not None and user_auth.get_membership(org["org_id"], user["user_id"]):
+        resolved["_actor_user_id"] = user["user_id"]
+        resolved["_actor_email"] = user["email"]
+    return resolved
 
 
 def require_admin_session(x_admin_session: Optional[str] = Header(default=None)) -> str:
@@ -464,6 +558,12 @@ async def admin_list_orgs(_token: str = Depends(require_admin_session)):
 
 class RegisterOrgRequest(BaseModel):
     org_name: str
+    # Optional, and the difference matters. Supplied, the address becomes the
+    # organization's first owner and gets a sign-in link -- which is the only
+    # way anyone ever becomes an owner, since there is no other bootstrap.
+    # Omitted, the org exists with an API key and no human members: usable by a
+    # pipeline, but nobody can sign in to it or invite anyone.
+    email: Optional[str] = None
 
 
 @app.post("/saas/orgs/register", tags=["Org"])
@@ -478,16 +578,262 @@ async def register_org(body: RegisterOrgRequest):
         raise HTTPException(status_code=400, detail="Organization name must be at least 2 characters.")
     if len(name) > 120:
         raise HTTPException(status_code=400, detail="Organization name must be 120 characters or fewer.")
+
+    email = user_auth.normalize_email(body.email or "")
+    if email and not user_auth.looks_like_email(email):
+        raise HTTPException(status_code=400, detail="That is not a usable email address.")
+
     try:
         org = create_org(name, "free")
     except Exception:
         raise HTTPException(status_code=500, detail="Could not create organization. Please try again.")
+
+    owner_invited = False
+    if email:
+        try:
+            owner = user_auth.create_user(body.email)
+            user_auth.add_member(org["org_id"], owner["user_id"], user_auth.ROLE_OWNER)
+            raw = user_auth.issue_login_token(owner["user_id"])
+            email_svc.send_login_link(email, user_auth.login_url(_app_base_url(), raw),
+                                      org_name=org["org_name"])
+            owner_invited = True
+        except Exception as exc:
+            # The org and the API key are already real and already returned
+            # below. Failing the whole request here would leave an org the
+            # caller never learns the key for, which is worse than an owner who
+            # has to ask for a fresh link from /saas/auth/request-link.
+            _logger.error("AUTH: owner bootstrap failed org=%s: %s", org["org_id"], exc)
+
     return {
         "org_id": org["org_id"],
         "org_name": org["org_name"],
+        # Shown once and never recoverable: it is not stored in plaintext.
         "api_key": org["api_key"],
         "plan": org["plan"],
+        "owner_invited": owner_invited,
     }
+
+
+# ── Sign-in: magic link ───────────────────────────────────────────────────────
+#
+# The machine credential (the org API key) is untouched by everything below.
+# This is the human door, and the two coexist: pipelines keep using the key,
+# people get a session that carries their name onto every review action.
+
+
+def _app_base_url() -> str:
+    """Where the sign-in link points.
+
+    The link is built from configuration, never from the request's Host or
+    Origin header. Trusting a header here is the classic host-header poisoning
+    hole: an attacker POSTs a sign-in request with a Host they control, the
+    victim receives a real link to the attacker's domain, and opening it hands
+    over the token.
+    """
+    return (os.environ.get("APP_BASE_URL") or "http://localhost:3000").strip()
+
+
+def _client_ip(request: Request) -> str:
+    """The immediate peer address.
+
+    X-Forwarded-For is deliberately ignored: it is client-supplied, so honouring
+    it lets a caller mint a fresh throttle bucket per request by varying one
+    header. On a platform that terminates TLS at a proxy this means the throttle
+    counts the proxy, which is a known, stated limitation rather than a control
+    that looks real and is not.
+    """
+    return request.client.host if request.client else ""
+
+
+class RequestLinkRequest(BaseModel):
+    email: str
+
+
+@app.post("/saas/auth/request-link", status_code=202, tags=["Auth"])
+async def auth_request_link(body: RequestLinkRequest, request: Request):
+    """Mail a sign-in link. Always 202, always the same body.
+
+    Identical whether the address belongs to a user, belongs to nobody, or is
+    malformed. Any difference -- status, wording, or a delivery error surfaced
+    to the caller -- is an oracle for which addresses hold accounts, which is
+    exactly what someone probes before a phishing run at a payer's compliance
+    team.
+    """
+    reply = {"status": "accepted",
+             "detail": "If that address has access, a sign-in link is on its way."}
+
+    email = user_auth.normalize_email(body.email)
+    client_ip = _client_ip(request)
+
+    # Both buckets are checked and charged regardless of whether the address
+    # exists, so a locked-out response cannot be read as "this address is real".
+    for key in (f"ip:{client_ip}", f"email:{email}"):
+        if key.endswith(":") or user_auth.throttle_locked_until(key) is None:
+            continue
+        _logger.warning("AUTH: request-link throttled key=%s", key.split(":", 1)[0])
+        return reply
+    for key in (f"ip:{client_ip}", f"email:{email}"):
+        if not key.endswith(":"):
+            user_auth.record_attempt(key)
+
+    if not user_auth.looks_like_email(email):
+        return reply
+
+    try:
+        link = user_auth.request_login_link(
+            email, base_url=_app_base_url(), requested_ip=client_ip)
+        if link is not None:
+            email_svc.send_login_link(email, link)
+    except Exception as exc:
+        # Logged, never returned. A provider outage must not become a signal
+        # the caller can use to tell a real address from an unknown one.
+        _logger.error("AUTH: could not send sign-in link: %s", exc)
+
+    return reply
+
+
+class VerifyTokenRequest(BaseModel):
+    token: str
+
+
+@app.post("/saas/auth/verify", tags=["Auth"])
+async def auth_verify(body: VerifyTokenRequest, response: Response):
+    """Redeem a link and open a session. The token is spent either way."""
+    result = user_auth.verify_and_start_session(body.token)
+    if result is None:
+        raise HTTPException(
+            status_code=401,
+            detail="That sign-in link has expired or has already been used. "
+                   "Request a new one.",
+        )
+    set_session_cookie(response, result["session"])
+    user_auth.clear_attempts(f"email:{user_auth.normalize_email(result['user']['email'])}")
+    _logger.info("AUTH: session opened user_id=%s", result["user"]["user_id"])
+    return {
+        "user": {"user_id": result["user"]["user_id"], "email": result["user"]["email"]},
+        "orgs": result["orgs"],
+    }
+
+
+@app.post("/saas/auth/logout", tags=["Auth"])
+async def auth_logout(
+    response: Response,
+    nhid_session: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    """End this session. Idempotent — signing out twice is not an error."""
+    if nhid_session:
+        user_auth.delete_session(nhid_session)
+    clear_session_cookie(response)
+    return {"status": "signed_out"}
+
+
+@app.get("/saas/auth/me", tags=["Auth"])
+async def auth_me(user: Dict = Depends(current_user)):
+    return {
+        "user": {"user_id": user["user_id"], "email": user["email"],
+                 "last_seen_at": user.get("last_seen_at")},
+        "orgs": user_auth.orgs_for_user(user["user_id"]),
+    }
+
+
+# ── Org members ───────────────────────────────────────────────────────────────
+
+class InviteMemberRequest(BaseModel):
+    email: str
+    role: str = user_auth.ROLE_MEMBER
+
+
+def _require_owner(org_id: str, user: Dict[str, Any]) -> None:
+    membership = user_auth.get_membership(org_id, user["user_id"])
+    if membership is None or membership["role"] != user_auth.ROLE_OWNER:
+        raise HTTPException(
+            status_code=403,
+            detail="Only an owner of this organization can manage its members.",
+        )
+
+
+@app.get("/saas/orgs/members", tags=["Org"])
+async def list_org_members(org: Dict = Depends(get_current_org),
+                           user: Dict = Depends(current_user)):
+    """Who can sign in to this organization.
+
+    Requires both credentials: the API key says which org, the session says who
+    is asking. A key alone could list the names and addresses of a customer's
+    whole compliance team, and that key is a value shared by that team.
+    """
+    membership = user_auth.get_membership(org["org_id"], user["user_id"])
+    if membership is None:
+        raise HTTPException(status_code=403,
+                            detail="You are not a member of this organization.")
+    return {"members": user_auth.list_members(org["org_id"]),
+            "your_role": membership["role"]}
+
+
+@app.post("/saas/orgs/members", status_code=201, tags=["Org"])
+async def invite_org_member(body: InviteMemberRequest,
+                            org: Dict = Depends(get_current_org),
+                            user: Dict = Depends(current_user)):
+    """Add someone to this organization and mail them a sign-in link."""
+    _require_owner(org["org_id"], user)
+
+    email = user_auth.normalize_email(body.email)
+    if not user_auth.looks_like_email(email):
+        raise HTTPException(status_code=400, detail="That is not a usable email address.")
+    if body.role not in user_auth.ROLES:
+        raise HTTPException(status_code=400,
+                            detail=f"role must be one of {list(user_auth.ROLES)}")
+
+    invited = user_auth.create_user(body.email)
+    user_auth.add_member(org["org_id"], invited["user_id"], body.role)
+
+    # Unlike request-link, this endpoint may report a delivery failure: the
+    # caller already knows the address (they typed it) and already knows it now
+    # has access, so there is no enumeration left to protect and silence would
+    # just strand the invitee.
+    delivered = True
+    try:
+        raw = user_auth.issue_login_token(invited["user_id"])
+        email_svc.send_login_link(email, user_auth.login_url(_app_base_url(), raw),
+                                  org_name=org.get("org_name"))
+    except Exception as exc:
+        delivered = False
+        _logger.error("AUTH: invite mail failed org=%s: %s", org["org_id"], exc)
+
+    _logger.info("AUTH: member added org=%s user_id=%s role=%s",
+                 org["org_id"], invited["user_id"], body.role)
+    return {"user_id": invited["user_id"], "email": invited["email"],
+            "role": body.role, "invite_delivered": delivered}
+
+
+@app.delete("/saas/orgs/members/{member_user_id}", tags=["Org"])
+async def remove_org_member(member_user_id: str,
+                            org: Dict = Depends(get_current_org),
+                            user: Dict = Depends(current_user)):
+    """Remove someone's access, and end their sessions immediately.
+
+    Refuses to remove the last owner: an organization with no owner can never
+    invite anyone again, and recovering from that needs operator intervention
+    on the database.
+    """
+    _require_owner(org["org_id"], user)
+
+    membership = user_auth.get_membership(org["org_id"], member_user_id)
+    if membership is None:
+        raise HTTPException(status_code=404,
+                            detail="That person is not a member of this organization.")
+    if membership["role"] == user_auth.ROLE_OWNER and user_auth.count_owners(org["org_id"]) <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="This is the only owner. Make someone else an owner first.",
+        )
+
+    user_auth.remove_member(org["org_id"], member_user_id)
+    # Revoking membership without revoking sessions leaves a live credential
+    # behind, so the two happen together.
+    if not user_auth.orgs_for_user(member_user_id):
+        user_auth.delete_sessions_for_user(member_user_id)
+    _logger.info("AUTH: member removed org=%s user_id=%s", org["org_id"], member_user_id)
+    return {"status": "removed", "user_id": member_user_id}
 
 
 # ── Org: user ↔ org linkage ───────────────────────────────────────────────────
@@ -2089,9 +2435,11 @@ class IngestRequest(BaseModel):
 class FindingUpdateRequest(BaseModel):
     status: Optional[str] = None
     resolution: Optional[str] = None
-    reviewer: Optional[str] = None
     notes: Optional[str] = None
     remediation: Optional[str] = None
+    # `reviewer` is deliberately gone. It used to be a free-text field the
+    # client filled in, which meant the audit trail recorded whatever the
+    # caller typed. Who performed a review is now resolved from the session.
 
 
 class TimeEntryRequest(BaseModel):
@@ -2201,13 +2549,24 @@ async def monitor_finding_detail(finding_id: str, org: Dict = Depends(subscripti
 
 @app.patch("/saas/monitor/findings/{finding_id}", tags=["Monitoring"])
 async def monitor_update_finding(
-    finding_id: str, body: FindingUpdateRequest, org: Dict = Depends(subscription_gated_org)
+    finding_id: str, body: FindingUpdateRequest,
+    org: Dict = Depends(subscription_gated_org),
+    user: Optional[Dict] = Depends(current_user_optional),
 ):
+    """Record a review decision, attributed to whoever made it.
+
+    A session signs the action with that person's identity. An API key alone
+    still works -- pipelines resolve findings too -- and is recorded as an
+    unattributed machine action rather than as a nameless person.
+    """
+    actor = user if user and user_auth.get_membership(org["org_id"], user["user_id"]) else None
     try:
         return monitoring.update_finding(
             org["org_id"], finding_id,
-            status=body.status, resolution=body.resolution, reviewer=body.reviewer,
+            status=body.status, resolution=body.resolution,
             notes=body.notes, remediation=body.remediation,
+            actor_user_id=actor["user_id"] if actor else None,
+            actor_email=actor["email"] if actor else None,
         )
     except LookupError:
         raise HTTPException(status_code=404, detail="Finding not found")

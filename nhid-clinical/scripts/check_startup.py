@@ -35,6 +35,17 @@ REQUIRED_ONE_OF = [
     ),
 ]
 
+# Required only when APP_ENV=production. Outside production the gateway selects
+# the development email backend, which is a working configuration rather than a
+# missing one -- so reporting these as absent everywhere would train people to
+# ignore the report.
+PRODUCTION_REQUIRED = [
+    ("EMAIL_BACKEND", "sign-in mail sender: 'resend' or 'postmark', never 'log'"),
+    ("EMAIL_API_KEY", "the mail provider's API key"),
+    ("EMAIL_FROM", "From address on a domain verified with the provider"),
+    ("APP_BASE_URL", "frontend origin that sign-in links point to"),
+]
+
 
 def _ok(msg: str) -> None:
     print(f"  ok      {msg}")
@@ -63,6 +74,22 @@ def check_env() -> bool:
         else:
             _fail(f"none of {' / '.join(names)} is set ({desc})")
             passed = False
+
+    production = (os.environ.get("APP_ENV") or "").strip().lower() == "production"
+    for name, desc in PRODUCTION_REQUIRED:
+        value = os.environ.get(name)
+        if value:
+            _ok(f"{name} is set ({desc})")
+        elif production:
+            _fail(f"{name} is not set ({desc}) — required in production")
+            passed = False
+        else:
+            print(f"  --      {name} is not set ({desc}) — development only")
+
+    if production and (os.environ.get("EMAIL_BACKEND") or "").strip().lower() == "log":
+        _fail("EMAIL_BACKEND=log in production — sign-in links would print to "
+              "the console instead of being delivered")
+        passed = False
 
     return passed
 

@@ -9,6 +9,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useRoute } from "wouter";
 import { useOpsKey } from "@/hooks/use-nhid";
+import { useSession } from "@/hooks/use-session";
 import { monitorApi, CATEGORY_LABEL, Finding } from "@/lib/monitoring-api";
 import { OpsShell, StatusPill, AttestationPill } from "./ops-ui";
 
@@ -87,7 +88,6 @@ export function OpsFindingDetail() {
   const [, params] = useRoute("/ops/findings/:id");
   const id = params?.id;
 
-  const [reviewer, setReviewer] = useState("");
   const [notes, setNotes] = useState("");
   const [remediation, setRemediation] = useState("");
   const [minutes, setMinutes] = useState("");
@@ -113,7 +113,6 @@ export function OpsFindingDetail() {
       activity: "finding_review",
       minutes: Number(minutes),
       finding_id: id,
-      reviewer: reviewer || undefined,
     }),
     onSuccess: () => { setMinutes(""); qc.invalidateQueries({ queryKey: ["ops-metrics"] }); },
   });
@@ -142,30 +141,28 @@ export function OpsFindingDetail() {
 
       <div className="card">
         <h2>Review</h2>
-        <div className="toolbar">
-          <input placeholder="Reviewer" value={reviewer} onChange={(e) => setReviewer(e.target.value)} />
-        </div>
+        <ReviewAttribution />
         <textarea placeholder="Review notes" value={notes} rows={3}
           onChange={(e) => setNotes(e.target.value)} style={{ width: "100%", marginBottom: 8 }} />
         <textarea placeholder="Remediation taken (if any)" value={remediation} rows={2}
           onChange={(e) => setRemediation(e.target.value)} style={{ width: "100%", marginBottom: 10 }} />
         <div className="toolbar">
           <button disabled={update.isPending}
-            onClick={() => update.mutate({ status: "under_review", reviewer, notes })}>
+            onClick={() => update.mutate({ status: "under_review", notes })}>
             Mark under review
           </button>
           <button className="primary" disabled={update.isPending}
             onClick={() => update.mutate({
-              status: "resolved", resolution: "remediated", reviewer, notes, remediation,
+              status: "resolved", resolution: "remediated", notes, remediation,
             })}>
             Resolve — remediated
           </button>
           <button disabled={update.isPending}
-            onClick={() => update.mutate({ status: "resolved", resolution: "accepted", reviewer, notes })}>
+            onClick={() => update.mutate({ status: "resolved", resolution: "accepted", notes })}>
             Resolve — accepted
           </button>
           <button disabled={update.isPending}
-            onClick={() => update.mutate({ status: "resolved", resolution: "not_applicable", reviewer, notes })}>
+            onClick={() => update.mutate({ status: "resolved", resolution: "not_applicable", notes })}>
             Resolve — not applicable
           </button>
         </div>
@@ -202,5 +199,41 @@ export function OpsFindingDetail() {
         )}
       </div>
     </OpsShell>
+  );
+}
+
+/**
+ * Says who the next review action will be recorded as.
+ *
+ * This replaced a free-text "Reviewer" input. That input was the whole of the
+ * product's attribution: whatever was typed went into `review_events.reviewer`,
+ * and an empty box became the literal string "unknown". So the audit trail
+ * recorded a claim, not a fact, and anyone holding the shared organization key
+ * could sign a decision with a colleague's name.
+ *
+ * The server now takes the identity from the session and ignores any
+ * `reviewer` the client sends. This component only reports what it will
+ * record — it cannot change it, which is the point.
+ */
+function ReviewAttribution() {
+  const { data: session, isLoading } = useSession();
+
+  if (isLoading) return null;
+
+  if (!session) {
+    return (
+      <div className="notice" style={{ marginBottom: 12 }}>
+        You are not signed in, so this decision will be recorded as an{" "}
+        <strong>unattributed</strong> action by the organization&apos;s API key —
+        no person&apos;s name against it.{" "}
+        <Link href="/signin">Sign in</Link> to put yours on the record.
+      </div>
+    );
+  }
+
+  return (
+    <p className="muted" style={{ marginTop: 0, marginBottom: 12, fontSize: 12.5 }}>
+      Recorded as <strong>{session.user.email}</strong>.
+    </p>
   );
 }

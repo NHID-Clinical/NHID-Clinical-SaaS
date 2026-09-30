@@ -62,6 +62,7 @@ must be set, and why `CORS_ALLOWED_ORIGINS` must name the frontend exactly.
 | **GitHub** | Source. Render deploys from it. | free |
 | **Render** | Hosts the API (web service) and the frontend (static site). | API needs a paid instance; see below |
 | **Supabase** *(or Render Postgres)* | Managed PostgreSQL. | free tier is enough to start |
+| **Resend** *(or Postmark)* | Delivers sign-in links. Without it nobody inside a customer organization can sign in. | free tier is enough to start |
 | **Stripe** | Only if you enable billing. | free until you charge |
 
 **On the Render plan.** The API must not be on a free instance. Free instances
@@ -239,6 +240,84 @@ looks like a dead backend in the UI and is only obvious in the browser console.
 
 ---
 
+## 7a. Sign-in links
+
+There are two credentials, and they are not interchangeable:
+
+| | credential | used by |
+|---|---|---|
+| **machine** | organization API key | ingest pipelines, scripts, CI |
+| **human** | magic-link session | people opening `/ops` in a browser |
+
+The API key is unchanged and still does everything it did. The session exists so
+that a review decision carries the name of the person who made it — before it,
+`review_events.reviewer` was free text the client supplied, defaulting to the
+literal string `"unknown"`. An audit product that cannot say who resolved a
+finding answers the first question an auditor asks with a shrug.
+
+**This is required in production, and the gateway enforces it at startup.** With
+`APP_ENV=production` and no sender configured the process refuses to boot. That
+is deliberate: a deployment that silently cannot send mail accepts every sign-in
+request, answers `202`, delivers nothing, and locks every user out with no error
+anywhere. Startup is the last cheap moment to catch it.
+
+### What to set up
+
+1. **Create an account** at [Resend](https://resend.com) or
+   [Postmark](https://postmarkapp.com). Both have a free tier that covers a pilot.
+2. **Verify a sending domain.** The provider gives you DNS records — SPF and
+   DKIM — to add at your registrar. Mail from an unverified domain is rejected
+   or filed as spam, which looks exactly like a broken sign-in.
+3. **Set four variables** on the API service:
+
+```
+EMAIL_BACKEND=resend                        # or postmark
+EMAIL_API_KEY=<the provider's API key>      # secret
+EMAIL_FROM=sign-in@your-verified-domain
+APP_BASE_URL=https://app.<your-domain>      # the FRONTEND origin
+```
+
+`APP_BASE_URL` is where links point. It is read from configuration and never
+from the request's `Host` header — honouring that header would let an attacker
+POST a sign-in request with a host they control and have your user mailed a
+genuine link to the attacker's domain.
+
+4. **If the app and the API are on different subdomains**, scope the session
+   cookie to the parent:
+
+```
+SESSION_COOKIE_DOMAIN=.your-domain.com
+```
+
+Without it a cookie set by `api.` is never sent to `app.`, and every request
+reads as signed-out for reasons nothing in the UI can explain. Leave it unset if
+both are served from one host.
+
+### How anyone gets a first account
+
+There is **no self-service sign-up**, on purpose. An endpoint that created an
+account for any address posted to it would let a stranger fill your users table
+and would leak, through its own response, which addresses already exist.
+
+- The **first owner** of an organization is created by passing `email` to
+  `POST /saas/orgs/register`. That address gets a link and becomes `owner`.
+- Every subsequent person is **invited by an owner**, from Settings → People, or
+  `POST /saas/orgs/members`.
+- An owner can promote another member to `owner`. The last owner cannot be
+  removed — an organization with none can never invite anyone again.
+
+### Verifying it without a provider
+
+Set `EMAIL_BACKEND=log` in development. The link is written to **stderr** — not
+to the application logger, because `log_redaction.py` correctly rewrites any
+`token=` it sees to `<redacted>`, and a sign-in token in a log really is a
+credential. Run the API, POST an address to `/saas/auth/request-link`, and copy
+the link off the console.
+
+`log` is rejected in production by the startup check above.
+
+---
+
 ## 8. Stripe (only if billing is enabled)
 
 1. **Developers → Webhooks → Add endpoint**: `https://api.<your-domain>/saas/billing/webhook`
@@ -327,6 +406,11 @@ export DATABASE_URL="postgresql://localhost:5432/nhid_saas"
 export HMAC_SECRET="dev-only-not-a-real-secret"
 export ADMIN_PASS="dev-only-admin-password"
 
+# Sign-in links go to stderr instead of an inbox, so the whole flow works
+# with no provider account and no network. Rejected in production.
+export EMAIL_BACKEND=log
+export APP_BASE_URL="http://localhost:3000"
+
 # 2. Migrations, then the API on 8010
 cd nhid-clinical
 python scripts/migrate.py
@@ -338,9 +422,22 @@ PORT=3000 BASE_PATH=/ npm run dev
 ```
 
 Leave `VITE_API_BASE_URL` unset locally — the dev proxy in `vite.config.ts` is
-what makes the relative `/saas-api` path work. Leave
-`NHID_SKIP_SCHEMA_BOOTSTRAP` unset too, so the app bootstraps its own schema,
-which is what the test suite relies on.
+what makes the relative `/saas-api` path work. Leave `SESSION_COOKIE_DOMAIN`
+unset too: the proxy makes the app and the API one origin, so a host-only
+cookie is correct. Leave `NHID_SKIP_SCHEMA_BOOTSTRAP` unset as well, so the app
+bootstraps its own schema, which is what the test suite relies on.
+
+To sign in locally, register an organization with an address and read the link
+off the API's console:
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/saas/orgs/register \
+  -H 'Content-Type: application/json' \
+  -d '{"org_name":"Local Co","email":"you@example.org"}'
+# -> the API's stderr prints:  [dev sign-in link for you@example.org]
+```
+
+Open that link. It works once and expires in 15 minutes.
 
 Tests:
 
@@ -438,6 +535,10 @@ Before calling a deployment done:
 - [ ] `python scripts/migrate.py --check` exits 0 against the production database
 - [ ] `ADMIN_PASS_HASH` set, `ADMIN_PASS` unset
 - [ ] `CORS_ALLOWED_ORIGINS` names the frontend origin exactly
+- [ ] `EMAIL_BACKEND` is `resend` or `postmark` — never `log` — with `EMAIL_API_KEY`, `EMAIL_FROM` and `APP_BASE_URL` set
+- [ ] The sending domain's SPF and DKIM records resolve
+- [ ] A real sign-in link arrived in a real inbox and opened a session
+- [ ] `SESSION_COOKIE_DOMAIN` set if the app and API are on different subdomains
 - [ ] `VITE_API_BASE_URL` set, and the frontend rebuilt since
 - [ ] `/health` reports `"db":"healthy"`
 - [ ] All ten smoke-test steps pass

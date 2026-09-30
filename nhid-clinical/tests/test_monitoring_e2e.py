@@ -286,14 +286,17 @@ def test_a_finding_can_be_reviewed_and_resolved(loaded):
     assert findings
     target = findings[0]["finding_id"]
 
+    # Attribution comes from the resolved credential, not from the request: the
+    # caller passes the user it authenticated, or nothing at all.
     monitoring.update_finding(loaded["org_id"], target,
                               status=monitoring.FINDING_UNDER_REVIEW,
-                              reviewer="qa.analyst", notes="Checking the recording.")
+                              notes="Checking the recording.",
+                              actor_user_id="usr_qa", actor_email="qa.analyst@example.org")
     monitoring.update_finding(loaded["org_id"], target,
                               status=monitoring.FINDING_RESOLVED,
                               resolution=monitoring.RESOLUTION_REMEDIATED,
-                              reviewer="qa.analyst",
-                              remediation="Vendor updated the opening script.")
+                              remediation="Vendor updated the opening script.",
+                              actor_user_id="usr_qa", actor_email="qa.analyst@example.org")
 
     resolved = monitoring.get_finding(loaded["org_id"], target)
     assert resolved["status"] == monitoring.FINDING_RESOLVED
@@ -301,7 +304,8 @@ def test_a_finding_can_be_reviewed_and_resolved(loaded):
     assert resolved["resolved_at"] is not None
     # The review history is evidence, not metadata about evidence.
     assert len(resolved["review_history"]) >= 2
-    assert resolved["review_history"][0]["reviewer"] == "qa.analyst"
+    assert resolved["review_history"][0]["reviewer"] == "qa.analyst@example.org"
+    assert resolved["review_history"][0]["reviewer_user_id"] == "usr_qa"
 
 
 def test_invalid_status_is_refused(loaded):

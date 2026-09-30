@@ -97,7 +97,14 @@ export interface Finding {
 export interface ReviewEvent {
   review_event_id: string;
   action: string;
+  /** Display name for the actor: an email address, or a stated machine action. */
   reviewer: string;
+  /**
+   * Set when a signed-in person performed the action; null when the caller
+   * presented only an organization API key. Null is a fact about the record,
+   * not a gap in it — `reviewer` says so in words.
+   */
+  reviewer_user_id: string | null;
   note: string | null;
   created_at: string;
 }
@@ -239,6 +246,11 @@ async function req<T>(path: string, init: RequestInit, apiKey: string): Promise<
 
   const res = await fetch(`${BASE}${path}`, {
     ...init,
+    // Carries the session cookie alongside the API key. The key says which
+    // organization; the cookie says which person, which is what the server
+    // writes into `review_events`. Without this the cookie is dropped on a
+    // cross-origin call and every review silently becomes unattributed.
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       "X-API-Key": apiKey,
@@ -286,7 +298,10 @@ export const monitorApi = {
   getFinding: (key: string, id: string) =>
     req<Finding>(`/saas/monitor/findings/${id}`, {}, key),
 
-  updateFinding: (key: string, id: string, body: Partial<Pick<Finding, "status" | "resolution" | "reviewer" | "notes" | "remediation">>) =>
+  // `reviewer` is deliberately absent from the writable fields. The server
+  // resolves who performed a review from the session and ignores anything the
+  // client sends, so accepting it here would only let the UI imply otherwise.
+  updateFinding: (key: string, id: string, body: Partial<Pick<Finding, "status" | "resolution" | "notes" | "remediation">>) =>
     req<Finding>(`/saas/monitor/findings/${id}`, { method: "PATCH", body: JSON.stringify(body) }, key),
 
   recordTime: (key: string, body: { assessment_id: string; activity: string; minutes: number; finding_id?: string; reviewer?: string }) =>

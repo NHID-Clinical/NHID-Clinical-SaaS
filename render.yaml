@@ -46,6 +46,26 @@ services:
         sync: false
       - key: CORS_ALLOWED_ORIGINS  # exact frontend origin(s), comma-separated
         sync: false
+
+      # Sign-in links. The gateway REFUSES TO START in production without a
+      # real sender: a deployment that cannot send mail answers 202 to every
+      # sign-in request, delivers nothing, and locks every user out with no
+      # error anywhere. See saas_layer/email.py.
+      - key: EMAIL_BACKEND         # resend | postmark
+        value: resend
+      - key: EMAIL_API_KEY         # the provider's API key
+        sync: false
+      - key: EMAIL_FROM            # an address on a domain you have verified (SPF + DKIM)
+        sync: false
+      # Where sign-in links point. Built from configuration, never from the
+      # request's Host header -- trusting that header lets an attacker have a
+      # victim mailed a real link to a domain the attacker controls.
+      - key: APP_BASE_URL          # e.g. https://app.nhid-clinical.org
+        sync: false
+      # Parent domain for the session cookie, so a cookie set by api.<domain>
+      # is sent to app.<domain>. Leave unset if both are served from one host.
+      - key: SESSION_COOKIE_DOMAIN # e.g. .nhid-clinical.org
+        sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_PUBLISHABLE_KEY
