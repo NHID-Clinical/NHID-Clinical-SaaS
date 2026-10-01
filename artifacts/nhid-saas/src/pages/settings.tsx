@@ -1,10 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { Link } from "wouter";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import {
   Settings2, Eye, EyeOff, Copy, Check, CreditCard, Shield,
   Building2, Key, Clock, ExternalLink, AlertTriangle, CheckCircle,
+  Users, Trash2, LogOut,
 } from "lucide-react";
 import { apiUrl } from "@/lib/config";
+import { AuthError, authApi, type OrgMember } from "@/lib/auth-api";
+import { useSession, useSignOut } from "@/hooks/use-session";
 
 interface OrgDetails {
   org_id: string;
@@ -249,6 +253,9 @@ export default function SettingsPage() {
         </div>
       </Section>
 
+      {/* People */}
+      <Members apiKey={apiKey} />
+
       {/* Plan */}
       <Section title="Current Plan" icon={CreditCard}>
         <div style={{
@@ -376,5 +383,177 @@ export default function SettingsPage() {
         )}
       </Section>
     </div>
+  );
+}
+
+/**
+ * Who can sign in to this organization.
+ *
+ * This is the screen that answers "how would other people get in?" — the
+ * question that exposed the hole this feature closes. Before it there was one
+ * credential per organization, an API key shared by a whole compliance team,
+ * and a review trail recording whatever name the client typed.
+ *
+ * Deliberately two operations and no more: invite, and remove. No seat counts,
+ * no pending-invitation state machine, no permission matrix. An invitation that
+ * has not been opened is indistinguishable here from one that has — which is
+ * accurate, because the server cannot see the mailbox, and a "pending" badge
+ * would be a claim about something nothing here observes.
+ */
+function Members({ apiKey }: { apiKey: string }) {
+  const queryClient = useQueryClient();
+  const { data: session } = useSession();
+  const signOut = useSignOut();
+
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"owner" | "member">("member");
+  const [problem, setProblem] = useState<string | null>(null);
+  const [undelivered, setUndelivered] = useState<string | null>(null);
+
+  const members = useQuery({
+    queryKey: ["org-members", apiKey],
+    queryFn: () => authApi.listMembers(apiKey),
+    enabled: !!apiKey && !!session,
+    retry: false,
+  });
+
+  const invite = useMutation({
+    mutationFn: () => authApi.invite(apiKey, email.trim(), role),
+    onSuccess: (result) => {
+      setEmail("");
+      setProblem(null);
+      // Reported, not hidden. Unlike the sign-in form — where a delivery
+      // failure must stay invisible or it becomes an enumeration oracle — the
+      // person here typed the address themselves, so there is nothing left to
+      // protect and silence would only strand the invitee.
+      setUndelivered(result.invite_delivered ? null : result.email);
+      queryClient.invalidateQueries({ queryKey: ["org-members"] });
+    },
+    onError: (error) => setProblem(
+      error instanceof AuthError ? error.message : "Could not send that invitation."),
+  });
+
+  const remove = useMutation({
+    mutationFn: (userId: string) => authApi.removeMember(apiKey, userId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["org-members"] }),
+    onError: (error) => setProblem(
+      error instanceof AuthError ? error.message : "Could not remove that member."),
+  });
+
+  if (!session) {
+    return (
+      <Section title="People" icon={Users}>
+        <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--nhid-muted)", lineHeight: 1.6 }}>
+          Sign in to see and manage who has access. The API key above
+          authenticates this organization; a session says <em>which person</em> is
+          asking — and that is what goes on a review decision.
+        </p>
+        <Link href="/signin" style={{ fontSize: 12, fontWeight: 700,
+                                      color: "var(--nhid-teal)", textDecoration: "none" }}>
+          Sign in →
+        </Link>
+      </Section>
+    );
+  }
+
+  const isOwner = members.data?.your_role === "owner";
+
+  return (
+    <Section title="People" icon={Users}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                    gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <span style={{ fontSize: 12.5, color: "var(--nhid-muted)" }}>
+          Signed in as <strong style={{ color: "var(--nhid-text)" }}>{session.user.email}</strong>
+          {members.data ? ` · ${members.data.your_role}` : ""}
+        </span>
+        <button
+          onClick={() => signOut.mutate()}
+          disabled={signOut.isPending}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "none",
+                   border: "1px solid var(--nhid-border)", borderRadius: 8, cursor: "pointer",
+                   color: "var(--nhid-muted)", fontSize: 11, padding: "5px 10px" }}
+        >
+          <LogOut size={12} /> Sign out
+        </button>
+      </div>
+
+      {members.isError && (
+        <p style={{ fontSize: 12, color: "#ef4444", margin: "0 0 10px", lineHeight: 1.55 }}>
+          Could not load the member list — your session may belong to a different
+          organization than this API key.
+        </p>
+      )}
+
+      {(members.data?.members ?? []).map((m: OrgMember) => (
+        <Row key={m.user_id} label={m.role === "owner" ? "Owner" : "Member"}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "flex-end" }}>
+            <span style={{ fontSize: 12.5, color: "var(--nhid-text)", wordBreak: "break-all" }}>
+              {m.email}
+            </span>
+            {isOwner && m.user_id !== session.user.user_id && (
+              <button
+                onClick={() => { setProblem(null); remove.mutate(m.user_id); }}
+                disabled={remove.isPending}
+                title={`Remove ${m.email}`}
+                style={{ background: "none", border: "none", cursor: "pointer",
+                         color: "var(--nhid-muted)", padding: "2px 4px", flexShrink: 0 }}
+              >
+                <Trash2 size={13} />
+              </button>
+            )}
+          </div>
+        </Row>
+      ))}
+
+      {isOwner && (
+        <form
+          onSubmit={(e) => { e.preventDefault(); setProblem(null); if (email.trim()) invite.mutate(); }}
+          style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}
+        >
+          <input
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="colleague@payer.example"
+            style={{ flex: "1 1 200px", minWidth: 0, fontSize: 12.5, padding: "7px 10px",
+                     borderRadius: 8, border: "1px solid var(--nhid-border)",
+                     background: "rgba(0,0,0,0.2)", color: "var(--nhid-text)" }}
+          />
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value as "owner" | "member")}
+            style={{ fontSize: 12.5, padding: "7px 10px", borderRadius: 8,
+                     border: "1px solid var(--nhid-border)",
+                     background: "rgba(0,0,0,0.2)", color: "var(--nhid-text)" }}
+          >
+            <option value="member">Member</option>
+            <option value="owner">Owner</option>
+          </select>
+          <button type="submit" disabled={invite.isPending || !email.trim()}
+                  style={{ fontSize: 12, fontWeight: 700, padding: "7px 14px", borderRadius: 8,
+                           border: "none", cursor: "pointer",
+                           background: "var(--nhid-teal)", color: "#04231f" }}>
+            {invite.isPending ? "Inviting…" : "Invite"}
+          </button>
+        </form>
+      )}
+
+      {problem && <p style={{ fontSize: 12, color: "#ef4444", margin: "10px 0 0" }}>{problem}</p>}
+      {undelivered && (
+        <p style={{ fontSize: 12, color: "#f59e0b", margin: "10px 0 0", lineHeight: 1.55 }}>
+          <strong>{undelivered}</strong> now has access, but the invitation email
+          could not be sent. They can request a link themselves from the sign-in
+          page.
+        </p>
+      )}
+
+      <p style={{ fontSize: 11.5, color: "var(--nhid-muted)", margin: "14px 0 0", lineHeight: 1.6 }}>
+        Members sign in with a link to their own mailbox — no passwords, and no
+        self-service sign-up. The API key stays what pipelines and scripts use;
+        it is not a person, and a review it performs is recorded as an
+        unattributed machine action rather than as a nameless reviewer.
+      </p>
+    </Section>
   );
 }

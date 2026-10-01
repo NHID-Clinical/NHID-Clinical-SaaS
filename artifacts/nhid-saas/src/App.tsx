@@ -18,6 +18,8 @@ import TryPage from "@/pages/try";
 import DocsSDKPage from "@/pages/docs-sdk";
 import PricingPage from "@/pages/pricing";
 import SettingsPage from "@/pages/settings";
+import SignIn from "@/pages/signin";
+import AuthVerify from "@/pages/auth-verify";
 import OpsOverview from "@/pages/ops/overview";
 import OpsInteractions from "@/pages/ops/interactions";
 import OpsInteractionDetail from "@/pages/ops/interaction-detail";
@@ -65,6 +67,12 @@ function Router() {
       <Route path="/demo" component={TryPage} />
       <Route path="/pricing" component={PricingPage} />
       <Route path="/docs/sdk" component={DocsSDKPage} />
+
+      {/* Sign-in — outside the shared layout, because the layout's navigation
+          is for someone who is already inside. Both are public by necessity:
+          a page you must be signed in to reach cannot be how you sign in. */}
+      <Route path="/signin" component={SignIn} />
+      <Route path="/auth/verify" component={AuthVerify} />
 
       {/* Admin portal — standalone, no shared layout, no auth gate */}
       <Route path="/admin" component={AdminPage} />

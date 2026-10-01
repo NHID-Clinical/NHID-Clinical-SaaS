@@ -846,20 +846,42 @@ def get_finding(org_id: str, finding_id: str) -> Optional[Dict[str, Any]]:
 
 # ── Review and remediation ────────────────────────────────────────────────────
 
+# What goes in `review_events.reviewer` when the caller presented an
+# organization API key and no user session. It is not "unknown", which reads
+# like a person whose name went missing; it says plainly that the action came
+# from a shared machine credential and no individual can be named. That
+# distinction is the difference between a gap in the record and a fact about it.
+UNATTRIBUTED_MACHINE = "api-key (unattributed)"
+
+
 def update_finding(org_id: str, finding_id: str, *, status: Optional[str] = None,
-                   resolution: Optional[str] = None, reviewer: Optional[str] = None,
+                   resolution: Optional[str] = None,
                    notes: Optional[str] = None,
-                   remediation: Optional[str] = None) -> Dict[str, Any]:
+                   remediation: Optional[str] = None,
+                   actor_user_id: Optional[str] = None,
+                   actor_email: Optional[str] = None) -> Dict[str, Any]:
     """Move a finding through open -> under_review -> resolved.
 
     Deliberately not an ITSM workflow. Three states and an optional resolution
     is what a QA analyst needs to record a decision; anything more is a product
     nobody asked for.
+
+    Attribution is resolved by the caller from the credential, never taken from
+    the request body. This used to accept a `reviewer` string the client sent
+    and default it to the literal "unknown" -- which meant the audit trail of an
+    audit product recorded whatever the client claimed, including nothing. The
+    gateway now passes the authenticated user, or neither, and a request body
+    that still carries a `reviewer` field is ignored rather than trusted.
     """
     if status and status not in FINDING_STATUSES:
         raise ValueError(f"status must be one of {FINDING_STATUSES}")
     if resolution and resolution not in RESOLUTIONS:
         raise ValueError(f"resolution must be one of {RESOLUTIONS}")
+
+    # The `findings.reviewer` column carries the identity that last touched the
+    # row, for display. `review_events` below carries the history, which is the
+    # part that has to survive.
+    reviewer = actor_email or (UNATTRIBUTED_MACHINE if actor_user_id is None else None)
 
     sets, params = [], []
     for column, value in (("status", status), ("resolution", resolution),
@@ -890,10 +912,14 @@ def update_finding(org_id: str, finding_id: str, *, status: Optional[str] = None
             # evidence, not metadata about it.
             cur.execute(
                 """INSERT INTO review_events
-                   (review_event_id, org_id, finding_id, action, reviewer, note)
-                   VALUES (%s,%s,%s,%s,%s,%s)""",
+                   (review_event_id, org_id, finding_id, action, reviewer,
+                    reviewer_user_id, note)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                 (_uid("rev"), org_id, finding_id,
-                 status or resolution or "updated", reviewer or "unknown", notes),
+                 status or resolution or "updated",
+                 # A reference when there is a user, and a stated absence when
+                 # there is not. Both are answers; "unknown" was neither.
+                 reviewer or UNATTRIBUTED_MACHINE, actor_user_id, notes),
             )
             return dict(row)
     finally:
