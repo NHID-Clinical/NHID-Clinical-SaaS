@@ -128,6 +128,8 @@ committed.
 | `STRIPE_WEBHOOK_SECRET` | billing only | **secret.** Without it webhooks are *rejected*, not trusted. |
 | `MAX_REQUEST_BYTES` | no | default 10 MiB |
 | `VOICE_SESSION_TTL_HOURS` | no | default 24 |
+| `TRANSCRIPT_RETENTION_DAYS` | no | default 30. Transcript text can carry PHI; past this it is redacted and the row keeps its evidence. Per-org override in `orgs.transcript_retention_days`. |
+| `TRANSCRIPT_PURGE_INTERVAL_SECS` | no | default 6h. The effective window is the retention policy **plus** one interval — check before contracting a number. |
 
 `nhid-clinical/.env.example` is the authoritative list and explains each one.
 

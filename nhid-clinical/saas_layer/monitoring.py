@@ -40,6 +40,7 @@ Design commitments
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -53,6 +54,8 @@ from saas_layer.normalization import (
     SPEAKER_AGENT,
     SPEAKER_HUMAN,
 )
+
+_logger = logging.getLogger(__name__)
 
 # ── Vocabulary ────────────────────────────────────────────────────────────────
 
@@ -1157,4 +1160,184 @@ def build_report(org_id: str, assessment_id: str) -> Dict[str, Any]:
         ),
         "limitations": limitations,
         "synthetic_records": synthetic,
+    }
+
+
+# ── Transcript retention ──────────────────────────────────────────────────────
+
+# Server-wide default, overridable per organization via
+# `orgs.transcript_retention_days`. Thirty days is short enough that a payer
+# security review accepts it without negotiation, and long enough to re-run a
+# changed control over a recent window.
+DEFAULT_TRANSCRIPT_RETENTION_DAYS = 30
+
+# What a purge writes. The row survives; only the text goes. `evaluations` and
+# `findings` reference `interaction_id`, so deleting the row would destroy the
+# evidence this platform exists to produce — a governance tool that loses its
+# own audit trail is worse than one that never kept it. See
+# migrations/0003_transcript_retention.sql for the full reasoning, including why
+# the clock runs from `created_at` (when we took possession) rather than the
+# client-supplied `occurred_at`.
+_PURGE_SET = "SET transcript = NULL, transcript_purged_at = NOW()"
+
+
+def purge_old_transcripts(
+    default_retention_days: int = DEFAULT_TRANSCRIPT_RETENTION_DAYS,
+) -> Dict[str, int]:
+    """Redact transcript text past its retention window. Returns the counts.
+
+    Two UPDATEs inside one transaction, mirroring
+    ``voice_sessions.purge_old_sessions``:
+
+      1. Orgs with a non-null ``transcript_retention_days`` — their own value.
+      2. Orgs with NULL — *default_retention_days*.
+
+    ``WHERE transcript IS NOT NULL`` makes this idempotent and lets it ride the
+    partial index, so a second run over the same window touches nothing.
+
+    Opens and closes its own connection; safe to call from any thread or
+    asyncio executor without holding an application lock.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""UPDATE interactions i {_PURGE_SET}
+                    FROM orgs o
+                    WHERE i.org_id = o.org_id
+                      AND i.transcript IS NOT NULL
+                      AND o.transcript_retention_days IS NOT NULL
+                      AND i.created_at <
+                          NOW() - make_interval(days => o.transcript_retention_days)"""
+            )
+            custom = cur.rowcount
+            cur.execute(
+                f"""UPDATE interactions i {_PURGE_SET}
+                    FROM orgs o
+                    WHERE i.org_id = o.org_id
+                      AND i.transcript IS NOT NULL
+                      AND o.transcript_retention_days IS NULL
+                      AND i.created_at < NOW() - make_interval(days => %s)""",
+                (default_retention_days,),
+            )
+            default = cur.rowcount
+    finally:
+        conn.close()
+
+    purged = custom + default
+    if purged:
+        _logger.info(
+            "transcript retention: redacted %d transcript(s) "
+            "(default=%dd, per-org=%d, default-policy=%d)",
+            purged, default_retention_days, custom, default,
+        )
+    return {"purged": purged, "per_org_policy": custom, "default_policy": default}
+
+
+def purge_org_transcripts(org_id: str, *, before_days: Optional[int] = None) -> int:
+    """Redact an organization's transcripts on request. Returns the count.
+
+    This is the deletion-on-request path, separate from the scheduled window: a
+    customer asking for their transcript text to be removed now should not have
+    to wait for the next purge cycle, and "we can delete it when you ask" is a
+    different contractual promise from "we delete it after N days".
+
+    *before_days* limits the request to text older than that many days; omitted,
+    every transcript the organization holds is redacted. Findings, evaluations
+    and the transcription attestation are untouched either way.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            if before_days is None:
+                cur.execute(
+                    f"""UPDATE interactions {_PURGE_SET}
+                        WHERE org_id = %s AND transcript IS NOT NULL""",
+                    (org_id,),
+                )
+            else:
+                cur.execute(
+                    f"""UPDATE interactions {_PURGE_SET}
+                        WHERE org_id = %s AND transcript IS NOT NULL
+                          AND created_at < NOW() - make_interval(days => %s)""",
+                    (org_id, before_days),
+                )
+            purged = cur.rowcount
+    finally:
+        conn.close()
+    _logger.info("transcript retention: org=%s redacted %d on request (before_days=%s)",
+                 org_id, purged, before_days)
+    return purged
+
+
+def purge_interaction_transcript(org_id: str, interaction_id: str) -> bool:
+    """Redact one interaction's transcript. True if text was removed.
+
+    False means the interaction does not belong to this organization, does not
+    exist, or already holds no text — deliberately not distinguished, because
+    the caller is told only about rows in its own tenant and a 404-vs-204
+    distinction here would report on rows in others.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""UPDATE interactions {_PURGE_SET}
+                    WHERE org_id = %s AND interaction_id = %s
+                      AND transcript IS NOT NULL""",
+                (org_id, interaction_id),
+            )
+            purged = cur.rowcount
+    finally:
+        conn.close()
+    if purged:
+        _logger.info("transcript retention: org=%s redacted interaction=%s on request",
+                     org_id, interaction_id)
+    return purged > 0
+
+
+def retention_status(org_id: str) -> Dict[str, Any]:
+    """What this organization's retention policy is, and what it still holds.
+
+    Built so an operator can answer a customer's "what do you have on us?"
+    without writing SQL, and so the answer is auditable: `purged` counts rows
+    whose text was removed and says so with a timestamp, rather than leaving a
+    NULL that could equally mean nothing was ever supplied.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            # `db.get_conn` sets RealDictCursor, so rows are dict-like: index by
+            # column name. Tuple access raises KeyError here rather than
+            # returning the wrong value, which is the kinder of the two failures.
+            cur.execute(
+                "SELECT transcript_retention_days FROM orgs WHERE org_id = %s",
+                (org_id,),
+            )
+            row = cur.fetchone()
+            configured = row["transcript_retention_days"] if row else None
+            cur.execute(
+                """SELECT
+                     COUNT(*) FILTER (WHERE transcript IS NOT NULL)            AS held,
+                     COUNT(*) FILTER (WHERE transcript_purged_at IS NOT NULL)  AS purged,
+                     MIN(created_at) FILTER (WHERE transcript IS NOT NULL)     AS oldest_held
+                   FROM interactions WHERE org_id = %s""",
+                (org_id,),
+            )
+            totals = cur.fetchone() or {}
+    finally:
+        conn.close()
+    oldest = totals.get("oldest_held")
+    effective = configured if configured is not None else DEFAULT_TRANSCRIPT_RETENTION_DAYS
+    return {
+        "org_id": org_id,
+        "retention_days": effective,
+        "policy_source": "organization" if configured is not None else "server_default",
+        "transcripts_held": totals.get("held") or 0,
+        "transcripts_purged": totals.get("purged") or 0,
+        "oldest_held_at": oldest.isoformat() if oldest else None,
     }
