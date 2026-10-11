@@ -124,6 +124,21 @@ _VOICE_SESSION_PURGE_INTERVAL: int = int(
     os.environ.get("VOICE_SESSION_PURGE_INTERVAL_SECS", str(6 * 3600))
 )
 
+# Transcript retention. The default window is deliberately short: transcript
+# text can carry PHI, and 30 days is what a payer security review accepts
+# without negotiation. Per-organization overrides live in
+# `orgs.transcript_retention_days`; this is only the fallback for orgs that have
+# set none. The sweep runs every 6 hours, so the effective window is the policy
+# plus at most one interval — stated here because "30 days" in a contract should
+# not be contradicted by a sweep that runs weekly.
+_TRANSCRIPT_RETENTION_DAYS: int = int(
+    os.environ.get("TRANSCRIPT_RETENTION_DAYS",
+                   str(monitoring.DEFAULT_TRANSCRIPT_RETENTION_DAYS))
+)
+_TRANSCRIPT_PURGE_INTERVAL: int = int(
+    os.environ.get("TRANSCRIPT_PURGE_INTERVAL_SECS", str(6 * 3600))
+)
+
 _logger = logging.getLogger(__name__)
 
 
@@ -149,6 +164,32 @@ async def _voice_session_cleanup_loop() -> None:
         except Exception as exc:
             _logger.warning("voice_session_cleanup error (will retry): %s", exc)
         await asyncio.sleep(_VOICE_SESSION_PURGE_INTERVAL)
+
+
+async def _transcript_retention_loop() -> None:
+    """Background coroutine: redacts transcript text past its retention window.
+
+    A separate loop from the voice-session purge, not a second call inside it,
+    because the two have different windows (hours vs days), different
+    justifications, and different things to say when they fail. Sharing one loop
+    would also mean one failing cancels the other's next run.
+    """
+    await asyncio.sleep(30)  # after the session purge, so startup logs read in order
+    while True:
+        try:
+            counts = await asyncio.get_event_loop().run_in_executor(
+                None, monitoring.purge_old_transcripts, _TRANSCRIPT_RETENTION_DAYS
+            )
+            _logger.info(
+                "transcript_retention: redacted %d (default=%dd, next in %ds)",
+                counts["purged"], _TRANSCRIPT_RETENTION_DAYS,
+                _TRANSCRIPT_PURGE_INTERVAL,
+            )
+        except Exception as exc:
+            # Never fatal. A retention sweep that cannot run is a compliance
+            # problem to alert on, not a reason to stop serving requests.
+            _logger.warning("transcript_retention error (will retry): %s", exc)
+        await asyncio.sleep(_TRANSCRIPT_PURGE_INTERVAL)
 
 
 @asynccontextmanager
@@ -182,15 +223,19 @@ async def _lifespan(app: FastAPI):
     # anywhere. Startup is the last cheap moment to notice.
     email_svc.verify_configured(production=_is_production())
 
-    task = asyncio.create_task(_voice_session_cleanup_loop())
+    tasks = [
+        asyncio.create_task(_voice_session_cleanup_loop()),
+        asyncio.create_task(_transcript_retention_loop()),
+    ]
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for task in tasks:
+            task.cancel()
+        # gather rather than awaiting in sequence: one cancellation must not
+        # leave the others un-awaited and logged as "task was destroyed but it
+        # is pending" on the way down.
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(
@@ -743,12 +788,18 @@ class InviteMemberRequest(BaseModel):
     role: str = user_auth.ROLE_MEMBER
 
 
-def _require_owner(org_id: str, user: Dict[str, Any]) -> None:
+def _require_owner(org_id: str, user: Dict[str, Any],
+                   action: str = "manage its members") -> None:
+    """Gate an owner-only action. *action* completes "Only an owner can ...".
+
+    The message names the action because a 403 that says "manage its members"
+    on a retention request sends the reader looking in the wrong place.
+    """
     membership = user_auth.get_membership(org_id, user["user_id"])
     if membership is None or membership["role"] != user_auth.ROLE_OWNER:
         raise HTTPException(
             status_code=403,
-            detail="Only an owner of this organization can manage its members.",
+            detail=f"Only an owner of this organization can {action}.",
         )
 
 
@@ -2378,6 +2429,64 @@ async def admin_set_org_session_retention(
     }
 
 
+class OrgTranscriptRetentionBody(BaseModel):
+    transcript_retention_days: Optional[int]  # None → revert to server default
+
+
+# An upper bound exists so a per-org override cannot quietly become "forever"
+# and reintroduce the gap this was built to close. A deployment that genuinely
+# needs longer should change the contract, not the column.
+_MAX_TRANSCRIPT_RETENTION_DAYS = 365
+
+
+@app.patch("/admin/orgs/{org_id}/transcript-retention", tags=["Admin"])
+async def admin_set_org_transcript_retention(
+    org_id: str,
+    body: OrgTranscriptRetentionBody,
+    _token: str = Depends(require_admin_session),
+):
+    """Set how many days this org's transcript text is retained.
+
+    Null reverts to the server-wide default (TRANSCRIPT_RETENTION_DAYS, 30).
+    Honoured by the next `_transcript_retention_loop` sweep, so the effective
+    window is this value plus at most one sweep interval — worth knowing before
+    writing a number into a contract.
+
+    Lowering it does not purge immediately; the next sweep does that. To remove
+    text now, the organization's owner uses
+    `POST /saas/monitor/retention/purge`, which is deliberately not an admin
+    route: destroying a customer's evidence should be the customer's decision.
+    """
+    org = get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail=f"Org '{org_id}' not found")
+    days = body.transcript_retention_days
+    if days is not None and not (1 <= days <= _MAX_TRANSCRIPT_RETENTION_DAYS):
+        raise HTTPException(
+            status_code=422,
+            detail=(f"transcript_retention_days must be between 1 and "
+                    f"{_MAX_TRANSCRIPT_RETENTION_DAYS}, or null for the "
+                    f"server default ({_TRANSCRIPT_RETENTION_DAYS})"),
+        )
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE orgs SET transcript_retention_days = %s WHERE org_id = %s",
+                (days, org_id),
+            )
+    finally:
+        conn.close()
+    _logger.info("ADMIN_SET_RETENTION org_id=%s transcript_retention_days=%s", org_id, days)
+    return {
+        "org_id": org_id,
+        "transcript_retention_days": days,
+        "effective_retention_days": days if days is not None else _TRANSCRIPT_RETENTION_DAYS,
+        "server_default_days": _TRANSCRIPT_RETENTION_DAYS,
+    }
+
+
 @app.get("/admin/org/{org_id}")
 async def admin_portal_org(org_id: str, _token: str = Depends(require_admin_session)):
     """Single org detail with full usage breakdown and recent activity."""
@@ -2572,6 +2681,85 @@ async def monitor_update_finding(
         raise HTTPException(status_code=404, detail="Finding not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ── Transcript retention ──────────────────────────────────────────────────────
+#
+# `interactions.transcript` can carry PHI. Until these routes existed the honest
+# answer to "how long do you keep our transcripts, and how do we have them
+# deleted?" was "indefinitely, and there is no way to" -- which is the first
+# question a payer security review asks. Scheduled expiry is
+# `_transcript_retention_loop`; these are the on-request paths and the
+# disclosure of what is actually held.
+#
+# All three redact text and keep the row. `evaluations` and `findings` reference
+# `interaction_id`, so deleting rows would destroy the evidence the platform
+# exists to produce.
+
+
+class TranscriptPurgeRequest(BaseModel):
+    # Omitted means every transcript this organization holds. Present, it limits
+    # the request to text older than N days, so "purge anything over 7 days"
+    # does not have to become "purge everything".
+    before_days: Optional[int] = None
+
+
+@app.get("/saas/monitor/retention", tags=["Monitoring"])
+async def monitor_retention_status(org: Dict = Depends(get_current_org)):
+    """This organization's retention policy, and what it still holds.
+
+    Readable with either credential: a customer asking "what do you have on us?"
+    should not need an owner session to find out, and the answer contains no
+    transcript text.
+    """
+    return monitoring.retention_status(org["org_id"])
+
+
+@app.post("/saas/monitor/retention/purge", tags=["Monitoring"])
+async def monitor_purge_transcripts(
+    body: TranscriptPurgeRequest,
+    org: Dict = Depends(get_current_org),
+    user: Dict = Depends(current_user),
+):
+    """Redact this organization's transcript text now, on request.
+
+    Requires the organization credential AND an owner's session, following the
+    member-management routes. An API key alone gets 401 from `current_user`:
+    an ingest credential that leaked must not be able to destroy the evidence it
+    was used to create, and a deletion this irreversible should carry a person's
+    name rather than a shared machine key's.
+    """
+    _require_owner(org["org_id"], user, "purge its transcripts")
+    if body.before_days is not None and body.before_days < 0:
+        raise HTTPException(status_code=422, detail="before_days must be 0 or greater")
+    purged = monitoring.purge_org_transcripts(
+        org["org_id"], before_days=body.before_days)
+    _logger.info("RETENTION: org=%s purged=%d by user=%s before_days=%s",
+                 org["org_id"], purged, user["user_id"], body.before_days)
+    return {"purged": purged, "before_days": body.before_days,
+            "requested_by": user["email"]}
+
+
+@app.delete("/saas/monitor/interactions/{interaction_id}/transcript",
+            tags=["Monitoring"])
+async def monitor_purge_one_transcript(
+    interaction_id: str,
+    org: Dict = Depends(get_current_org),
+    user: Dict = Depends(current_user),
+):
+    """Redact one interaction's transcript. Owner session required, as above.
+
+    `purged: false` means no text was removed -- the interaction is not this
+    organization's, does not exist, or already holds none. The three are not
+    distinguished, because telling a caller which would report on rows outside
+    its own tenant.
+    """
+    _require_owner(org["org_id"], user, "purge its transcripts")
+    purged = monitoring.purge_interaction_transcript(org["org_id"], interaction_id)
+    if purged:
+        _logger.info("RETENTION: org=%s interaction=%s purged by user=%s",
+                     org["org_id"], interaction_id, user["user_id"])
+    return {"interaction_id": interaction_id, "purged": purged}
 
 
 @app.post("/saas/monitor/time-entries", tags=["Monitoring"])
