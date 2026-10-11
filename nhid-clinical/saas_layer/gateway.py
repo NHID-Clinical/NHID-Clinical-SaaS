@@ -47,7 +47,7 @@ if _CLINICAL_DIR not in sys.path:
 from fastapi import Cookie, FastAPI, HTTPException, Header, Request, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, Any, Dict, List
 
 from saas_layer.auth import (
@@ -92,7 +92,7 @@ from saas_layer.voice_sessions import (
     update_voice_session_in_tx,
 )
 from saas_layer import agent_authorization, agent_registry
-from saas_layer import monitoring, normalization
+from saas_layer import monitoring, normalization, pilot_runs
 from saas_layer import email as email_svc
 from saas_layer import user_auth
 from saas_layer.db import get_conn
@@ -2760,6 +2760,182 @@ async def monitor_purge_one_transcript(
         _logger.info("RETENTION: org=%s interaction=%s purged by user=%s",
                      org["org_id"], interaction_id, user["user_id"])
     return {"interaction_id": interaction_id, "purged": purged}
+
+
+# ── Pilot runs: explicitly submitted, never observed ──────────────────────────
+#
+# The Tier 0 kit runs offline and reports nothing. That is deliberate and it is
+# the product's strongest claim, so these routes exist instead of telemetry: a
+# person exports a report and submits it on purpose.
+#
+# Everything stored is self-reported. Nothing here can confirm a run happened.
+
+
+class PilotRunSubmission(BaseModel):
+    # Mirrors pilot_runs.record_run. Loose on purpose: the kit's output shape
+    # will move, and a strict model here would reject real reports for being
+    # newer than this file. pilot_runs.validate_payload enforces what matters
+    # -- no conversational content, bounded size, a legal result status.
+    #
+    # extra="allow" is load-bearing, not laziness. Pydantic's default silently
+    # DROPS unknown keys, so a payload carrying `transcript` was discarded
+    # before validate_payload could see it and the caller got a 201. They would
+    # reasonably conclude we had stored their transcript. The validator must be
+    # shown everything that was actually sent in order to refuse it.
+    model_config = ConfigDict(extra="allow")
+
+    executed_at: Optional[str] = None
+    executed_tz: Optional[str] = None
+    scenario_id: Optional[str] = None
+    scenario_version: Optional[str] = None
+    evaluator_version: Optional[str] = None
+    kit_version: Optional[str] = None
+    completed: Optional[bool] = None
+    result_status: str = pilot_runs.RESULT_NOT_EVALUATED
+    failure_reason: Optional[str] = None
+    evidence_source: Optional[str] = None
+    control_decisions: Optional[Dict[str, Any]] = None
+    metrics: Optional[Dict[str, Any]] = None
+    reported_country: Optional[str] = None
+
+
+@app.get("/saas/pilot/submission-notice", tags=["Pilot"])
+async def pilot_submission_notice():
+    """What a submission sends, before anyone sends one.
+
+    Unauthenticated on purpose: someone deciding whether to submit should be
+    able to read what it would transmit without first having credentials. It
+    returns no data about anyone -- only this service's own stated behaviour.
+    """
+    return {
+        "what_is_transmitted": [
+            "Structured evaluation results: counts, rates and status.",
+            "Scenario, evaluator and kit version identifiers.",
+            "Execution timestamp and timezone, as you report them.",
+            "Optionally, a two-letter country code if you choose to include one.",
+        ],
+        "what_is_never_transmitted": [
+            "Transcripts, turn text or any conversational content.",
+            "Audio or recordings.",
+            "PHI, member identifiers or patient data.",
+            "Credentials.",
+        ],
+        "enforcement": ("A report containing conversational or identifying "
+                        "fields is rejected, not redacted. A 200 would wrongly "
+                        "suggest we are holding it."),
+        "the_kit_itself": ("docs/pilot-kit/measure_pilot.py makes no network "
+                           "calls. Submitting is a separate, deliberate act."),
+        "how_results_are_labelled": ("Every submission is stored as "
+                                     "self_reported. This service cannot "
+                                     "observe a run and never marks one "
+                                     "verified."),
+        "max_payload_bytes": pilot_runs.MAX_PAYLOAD_BYTES,
+    }
+
+
+@app.post("/saas/pilot/runs", status_code=201, tags=["Pilot"])
+async def pilot_submit_run(
+    body: PilotRunSubmission,
+    org: Dict = Depends(get_current_org),
+    user: Dict = Depends(current_user),
+):
+    """Submit one pilot report. Requires a session, not just an API key.
+
+    A person is attesting that they ran this, so the record carries their name.
+    An ingest key in a pipeline cannot make that attestation on anyone's behalf.
+    """
+    payload = body.model_dump(exclude_none=True)
+    try:
+        run = pilot_runs.record_run(org["org_id"], payload,
+                                    submitted_by=user["email"])
+    except pilot_runs.SubmissionRejected as exc:
+        # Audit the refusal too. A rejected submission is a thing that happened,
+        # and an audit trail that only records successes is a sales brochure.
+        try:
+            audit_svc.append_trace(org["org_id"], "pilot-submission", {
+                "event_type": "pilot_run_rejected",
+                "state_before": "submission_received",
+                "state_after": "submission_refused",
+                "reason_code": "PILOT_SUBMISSION_REJECTED",
+                "reason": str(exc)[:500],
+                "submitted_by": user["email"],
+            })
+        except Exception as audit_exc:  # never mask the user-facing reason
+            _logger.error("PILOT: rejection audit failed org=%s: %s",
+                          org["org_id"], audit_exc)
+        _logger.info("PILOT: submission rejected org=%s: %s", org["org_id"], exc)
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    try:
+        audit_svc.append_trace(org["org_id"], "pilot-submission", {
+            "event_type": "pilot_run_submitted",
+            "state_before": "submission_received",
+            "state_after": "run_recorded_self_reported",
+            "reason_code": "PILOT_RUN_SUBMITTED",
+            "run_id": run["run_id"],
+            "result_status": run["result_status"],
+            "verification": run["verification"],
+            "payload_sha256": run["payload_sha256"],
+            "submitted_by": user["email"],
+        })
+    except Exception as audit_exc:
+        # The run is already stored and its hash is already computed. Failing
+        # the request now would tell the submitter it did not land when it did.
+        _logger.error("PILOT: submission audit failed org=%s run=%s: %s",
+                      org["org_id"], run["run_id"], audit_exc)
+
+    return {
+        "run_id": run["run_id"],
+        "verification": run["verification"],
+        "result_status": run["result_status"],
+        "ingested_at": run["ingested_at"],
+        "payload_sha256": run["payload_sha256"],
+        "note": ("Recorded as self-reported. This service cannot independently "
+                 "confirm the run occurred."),
+    }
+
+
+@app.get("/saas/pilot/runs", tags=["Pilot"])
+async def pilot_list_runs(org: Dict = Depends(get_current_org),
+                          user: Dict = Depends(current_user),
+                          limit: int = 100):
+    return {"runs": pilot_runs.list_runs(org["org_id"], limit=limit)}
+
+
+@app.get("/saas/pilot/summary", tags=["Pilot"])
+async def pilot_summary(org: Dict = Depends(get_current_org),
+                        user: Dict = Depends(current_user)):
+    """Counts for the dashboard's pilot panel — separate from site traffic.
+
+    Website analytics and pilot runs are different things measured different
+    ways, and the dashboard must never add them together. This endpoint returns
+    only runs somebody submitted.
+    """
+    return pilot_runs.summary(org["org_id"])
+
+
+@app.get("/saas/pilot/runs/{run_id}/evidence", tags=["Pilot"])
+async def pilot_run_evidence(run_id: str,
+                             org: Dict = Depends(get_current_org),
+                             user: Dict = Depends(current_user)):
+    """The downloadable evidence record, carrying its own limitations."""
+    try:
+        report = pilot_runs.evidence_report(org["org_id"], run_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Pilot run not found")
+    try:
+        audit_svc.append_trace(org["org_id"], "pilot-submission", {
+            "event_type": "pilot_evidence_accessed",
+            "state_before": "evidence_at_rest",
+            "state_after": "evidence_disclosed",
+            "reason_code": "PILOT_EVIDENCE_ACCESSED",
+            "run_id": run_id,
+            "accessed_by": user["email"],
+        })
+    except Exception as audit_exc:
+        _logger.error("PILOT: evidence-access audit failed org=%s run=%s: %s",
+                      org["org_id"], run_id, audit_exc)
+    return report
 
 
 @app.post("/saas/monitor/time-entries", tags=["Monitoring"])
