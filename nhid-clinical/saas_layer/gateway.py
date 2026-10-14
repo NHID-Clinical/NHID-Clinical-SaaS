@@ -95,6 +95,7 @@ from saas_layer import agent_authorization, agent_registry
 from saas_layer import monitoring, normalization, pilot_runs
 from saas_layer import email as email_svc
 from saas_layer import user_auth
+from saas_layer import oauth_exchange
 from saas_layer.db import get_conn
 
 # NHID core is accessed via direct Python import (no Bridge HTTP dependency).
@@ -353,13 +354,33 @@ if os.environ.get("NHID_SKIP_SCHEMA_BOOTSTRAP", "").strip() not in ("1", "true",
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
-def get_current_org(x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
-    if not x_api_key:
-        raise HTTPException(status_code=401, detail="X-API-Key header required")
-    org = validate_api_key(x_api_key)
-    if not org:
-        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-    return org
+def get_current_org(
+    x_api_key: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Resolve the calling organization from one of two machine credentials.
+
+    Two paths, X-API-Key checked first and unchanged:
+
+      * `X-API-Key: <key>`          — the original static key (0001).
+      * `Authorization: Bearer <t>` — a short-lived token minted by
+                                      POST /saas/auth/token (RFC 8693, 0005).
+
+    Both resolve to the SAME org dict shape, so no downstream route can tell
+    which credential was used, and a request that carries both is authenticated
+    by the key — there is no mixing, one credential decides.
+    """
+    if x_api_key:
+        org = validate_api_key(x_api_key)
+        if not org:
+            raise HTTPException(status_code=403, detail="Invalid or inactive API key")
+        return org
+    if authorization and authorization.startswith("Bearer "):
+        org = oauth_exchange.resolve_token(authorization[len("Bearer "):].strip())
+        if not org:
+            raise HTTPException(status_code=403, detail="Invalid or expired token")
+        return org
+    raise HTTPException(status_code=401, detail="X-API-Key header required")
 
 
 
@@ -760,6 +781,95 @@ async def auth_verify(body: VerifyTokenRequest, response: Response):
     }
 
 
+def _oauth_error(status: int, error: str, description: str,
+                 headers: Optional[Dict[str, str]] = None) -> JSONResponse:
+    """An RFC 6749 §5.2-style error body. A client library parses these, not a
+    person, so the shape is {error, error_description}, not this API's usual
+    {detail}."""
+    return JSONResponse(
+        status_code=status,
+        content={"error": error, "error_description": description},
+        headers=headers or {},
+    )
+
+
+@app.post("/saas/auth/token", tags=["Auth"])
+async def token_exchange(request: Request):
+    """RFC 8693 token exchange: an enterprise IdP's JWT in, a short-lived NHID
+    Bearer token out.
+
+    The contract is checked explicitly and every failure maps to an OAuth
+    error body. Every verification failure returns one identical `invalid_grant`
+    so the response cannot tell an attacker which check failed (unconfigured
+    issuer vs bad signature vs expired are indistinguishable).
+
+    Throttling: failed exchanges are charged against an IP bucket and an
+    issuer bucket, both using the shared login lockout (5 in 15 min). A
+    success neither charges nor clears — so a valid token cannot be used to
+    reset a lockout that forgeries from the same address have earned, and a
+    client making many *successful* exchanges is never locked out. `record_attempt`
+    is a single atomic SQL statement, so concurrent bursts cannot each slip
+    under the threshold.
+    """
+    form = await request.form()
+    grant_type = form.get("grant_type")
+    subject_token = form.get("subject_token")
+    subject_token_type = form.get("subject_token_type")
+    requested_token_type = form.get("requested_token_type")
+
+    if grant_type != oauth_exchange.GRANT_TYPE_TOKEN_EXCHANGE:
+        return _oauth_error(400, "unsupported_grant_type",
+                            "grant_type must be token-exchange")
+    if subject_token_type != oauth_exchange.SUBJECT_TOKEN_TYPE_JWT:
+        return _oauth_error(400, "invalid_request",
+                            "subject_token_type must be the jwt token type")
+    if requested_token_type and requested_token_type != oauth_exchange.ISSUED_TOKEN_TYPE_ACCESS:
+        return _oauth_error(400, "invalid_request",
+                            "requested_token_type, if given, must be access_token")
+    if not subject_token or not isinstance(subject_token, str) \
+            or subject_token.count(".") != 2:
+        return _oauth_error(400, "invalid_request",
+                            "subject_token must be a JWT")
+
+    # Throttle buckets: the peer IP, and the issuer under attack (read
+    # unverified only to key the bucket — it authorizes nothing).
+    ip_key = f"oauth-ip:{_client_ip(request)}"
+    iss_key = None
+    try:
+        import jwt as _jwt
+        claimed_iss = _jwt.decode(subject_token,
+                                  options={"verify_signature": False}).get("iss")
+        if isinstance(claimed_iss, str) and claimed_iss:
+            iss_key = f"oauth-iss:{claimed_iss}"
+    except Exception:
+        iss_key = None
+
+    for key in (ip_key, iss_key):
+        if key and user_auth.throttle_locked_until(key) is not None:
+            return _oauth_error(429, "invalid_request",
+                                "Too many failed token exchanges. Try again later.",
+                                headers={"Retry-After": str(user_auth.LOGIN_LOCKOUT_SECONDS)})
+
+    verified = oauth_exchange.verify_subject_token(subject_token)
+    if verified is None:
+        for key in (ip_key, iss_key):
+            if key:
+                user_auth.record_attempt(key)
+        return _oauth_error(400, "invalid_grant",
+                            "The subject token could not be verified.")
+
+    raw = oauth_exchange.issue_token(
+        verified["org_id"], verified["issuer_id"], verified["subject"])
+    _logger.info("OAUTH: token issued org=%s issuer_id=%s subject=%s",
+                 verified["org_id"], verified["issuer_id"], verified["subject"])
+    return JSONResponse({
+        "access_token": raw,
+        "issued_token_type": oauth_exchange.ISSUED_TOKEN_TYPE_ACCESS,
+        "token_type": "Bearer",
+        "expires_in": oauth_exchange.EXCHANGED_TOKEN_TTL_SECONDS,
+    })
+
+
 @app.post("/saas/auth/logout", tags=["Auth"])
 async def auth_logout(
     response: Response,
@@ -939,6 +1049,59 @@ async def get_org_for_user(replit_user_id: str):
 
 
 # ── Org: self-service ─────────────────────────────────────────────────────────
+
+class ConfigureIssuerRequest(BaseModel):
+    issuer: str
+    jwks_uri: str
+    audience: str
+    subject_claim: str = "sub"
+
+
+@app.get("/saas/orgs/oauth-issuers", tags=["Org"])
+async def list_oauth_issuers(org: Dict = Depends(get_current_org),
+                             user: Dict = Depends(current_user)):
+    """The IdP issuers this org accepts token exchange from. Owner only —
+    configuring who may mint tokens for the org is an account action, not an
+    API-key one. Nothing here is secret (JWKS is public key material)."""
+    _require_owner(org["org_id"], user, "manage its OAuth issuers")
+    return {"issuers": oauth_exchange.list_issuers(org["org_id"])}
+
+
+@app.post("/saas/orgs/oauth-issuers", status_code=201, tags=["Org"])
+async def configure_oauth_issuer(body: ConfigureIssuerRequest,
+                                 org: Dict = Depends(get_current_org),
+                                 user: Dict = Depends(current_user)):
+    """Register an IdP this org will accept subject tokens from."""
+    _require_owner(org["org_id"], user, "manage its OAuth issuers")
+    try:
+        row = oauth_exchange.configure_issuer(
+            org["org_id"], body.issuer, body.jwks_uri, body.audience,
+            actor_user_id=user["user_id"], subject_claim=body.subject_claim)
+    except oauth_exchange.IssuerConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        # The UNIQUE (issuer, audience) is the cross-org guard: a second org
+        # claiming an already-claimed (issuer, audience) lands here.
+        if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+            raise HTTPException(
+                status_code=409,
+                detail="That issuer and audience are already configured.")
+        raise
+    return {"issuer_id": row["issuer_id"], "issuer": row["issuer"],
+            "audience": row["audience"], "active": row["active"]}
+
+
+@app.delete("/saas/orgs/oauth-issuers/{issuer_id}", tags=["Org"])
+async def deactivate_oauth_issuer(issuer_id: str,
+                                  org: Dict = Depends(get_current_org),
+                                  user: Dict = Depends(current_user)):
+    """Turn an issuer off and revoke every token minted through it."""
+    _require_owner(org["org_id"], user, "manage its OAuth issuers")
+    if not oauth_exchange.deactivate_issuer(org["org_id"], issuer_id,
+                                            actor_user_id=user["user_id"]):
+        raise HTTPException(status_code=404, detail="Issuer not found.")
+    return {"status": "deactivated", "issuer_id": issuer_id}
+
 
 @app.get("/saas/orgs/me")
 async def get_my_org(org: Dict = Depends(get_current_org)):
