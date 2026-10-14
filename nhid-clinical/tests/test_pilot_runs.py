@@ -284,6 +284,77 @@ def test_the_notice_is_readable_before_anyone_submits(client):
     assert "no network calls" in body["the_kit_itself"].lower()
 
 
+# ── Data classification ────────────────────────────────────────────────────────
+# A separate axis from verification: what *kind* of data the run was scored on.
+# The submitter declares it; it defaults to the most conservative tier; it never
+# rounds up; and it never becomes evidence of verification.
+
+def test_classification_defaults_to_synthetic_when_omitted(client, org, owner):
+    """A silent row is labelled synthetic — the most conservative tier, and what
+    the offline Tier 0 kit actually produces. It never defaults to something
+    stronger than the submitter claimed."""
+    _sign_in(client, org, owner)
+    body = client.post("/saas/pilot/runs", json=GOOD).json()
+    assert body["data_classification"] == pilot_runs.CLASSIFICATION_SYNTHETIC
+    run = pilot_runs.get_run(org["org_id"], body["run_id"])
+    assert run["data_classification"] == "synthetic"
+
+
+@pytest.mark.parametrize("value", ["synthetic", "deidentified", "production_derived"])
+def test_each_classification_round_trips(client, org, owner, value):
+    _sign_in(client, org, owner)
+    body = client.post("/saas/pilot/runs",
+                       json={**GOOD, "data_classification": value}).json()
+    assert body["data_classification"] == value
+    assert pilot_runs.get_run(org["org_id"], body["run_id"])["data_classification"] == value
+
+
+def test_an_unknown_classification_is_refused(client, org, owner):
+    """An illegal tier is refused outright — not coerced to synthetic, which
+    would hide a submitter's mistake, and not stored, which the DB CHECK would
+    reject anyway."""
+    _sign_in(client, org, owner)
+    r = client.post("/saas/pilot/runs",
+                    json={**GOOD, "data_classification": "real-ish"})
+    assert r.status_code == 422
+    assert "data_classification" in r.json()["detail"]
+
+
+def test_classification_is_independent_of_verification(client, org, owner):
+    """A run on production-derived data is still self-reported. The two axes
+    must not bleed into each other — a higher data tier is not verification."""
+    _sign_in(client, org, owner)
+    body = client.post("/saas/pilot/runs",
+                       json={**GOOD, "data_classification": "production_derived"}).json()
+    assert body["data_classification"] == "production_derived"
+    assert body["verification"] == pilot_runs.VERIFICATION_SELF
+
+
+def test_evidence_record_carries_the_classification(client, org, owner):
+    _sign_in(client, org, owner)
+    run_id = client.post("/saas/pilot/runs",
+                         json={**GOOD, "data_classification": "deidentified"}).json()["run_id"]
+    report = client.get(f"/saas/pilot/runs/{run_id}/evidence").json()
+    assert report["provenance"]["data_classification"] == "deidentified"
+    assert "separate axis" in report["provenance"]["classification_note"].lower()
+
+
+def test_summary_breaks_down_by_classification(client, org, owner):
+    _sign_in(client, org, owner)
+    client.post("/saas/pilot/runs", json={**GOOD, "data_classification": "synthetic"})
+    client.post("/saas/pilot/runs", json={**GOOD, "data_classification": "deidentified"})
+    by = client.get("/saas/pilot/summary").json()["by_data_classification"]
+    assert by["synthetic"] >= 1
+    assert by["deidentified"] >= 1
+
+
+def test_empty_state_reports_zero_classifications_not_nothing(org):
+    s = pilot_runs.summary(org["org_id"])
+    assert s["by_data_classification"] == {
+        "synthetic": 0, "deidentified": 0, "production_derived": 0,
+    }
+
+
 # ── Audit ─────────────────────────────────────────────────────────────────────
 
 def _audit_events(org_id: str):

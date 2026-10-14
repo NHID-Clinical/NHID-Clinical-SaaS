@@ -59,6 +59,21 @@ RESULTS = (RESULT_PASS, RESULT_FAIL, RESULT_INCONCLUSIVE, RESULT_NOT_EVALUATED)
 VERIFICATION_SELF = "self_reported"
 VERIFICATION_VERIFIED = "verified"
 
+# What kind of data the run was scored against. A different axis from
+# `verification`: a run can be self-reported on any of these. Ordered from the
+# lowest evidence tier to the highest (see the framework repo's
+# docs/validation/evidence-provenance-matrix.md). The submitter declares it, the
+# way they declare executed_at and reported_country; it is never inferred, and
+# it defaults to the most conservative value so a silent row is labelled as
+# synthetic, not as something stronger than it is.
+CLASSIFICATION_SYNTHETIC = "synthetic"
+CLASSIFICATION_DEIDENTIFIED = "deidentified"
+CLASSIFICATION_PRODUCTION = "production_derived"
+CLASSIFICATIONS = (
+    CLASSIFICATION_SYNTHETIC, CLASSIFICATION_DEIDENTIFIED, CLASSIFICATION_PRODUCTION,
+)
+CLASSIFICATION_DEFAULT = CLASSIFICATION_SYNTHETIC
+
 # Control decision outcomes we will count. Anything else in a submission is
 # ignored rather than stored, so a submitter cannot invent a control.
 COUNTABLE_DECISIONS = (
@@ -136,6 +151,14 @@ def validate_payload(payload: Dict[str, Any]) -> None:
             "omitted. It is never inferred."
         )
 
+    classification = payload.get("data_classification")
+    if classification is not None and classification not in CLASSIFICATIONS:
+        raise SubmissionRejected(
+            f"data_classification must be one of {', '.join(CLASSIFICATIONS)}, "
+            "or omitted (defaults to synthetic). It is a declaration of what "
+            "data the run was scored on, and it is never inferred."
+        )
+
 
 def canonical_hash(payload: Dict[str, Any]) -> str:
     """SHA-256 of the canonical payload.
@@ -188,8 +211,8 @@ def record_run(org_id: str, payload: Dict[str, Any], *,
                       scenario_version, evaluator_version, kit_version, completed,
                       result_status, failure_reason, verification, evidence_source,
                       control_decisions, metrics, payload_sha256, reported_country,
-                      submitted_by)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                      submitted_by, data_classification)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    RETURNING *""",
                 (run_id, org_id, executed_at, payload.get("executed_tz"),
                  payload.get("scenario_id"), payload.get("scenario_version"),
@@ -203,7 +226,12 @@ def record_run(org_id: str, payload: Dict[str, Any], *,
                  payload.get("evidence_source"),
                  json.dumps(_countable(payload.get("control_decisions"))),
                  json.dumps(payload.get("metrics") or {}),
-                 digest, payload.get("reported_country"), submitted_by),
+                 digest, payload.get("reported_country"), submitted_by,
+                 # Declared by the submitter (validated above), defaulting to the
+                 # most conservative tier. Unlike verification, this is theirs to
+                 # state — but it can only go as high as what they claim, never
+                 # higher by default.
+                 payload.get("data_classification") or CLASSIFICATION_DEFAULT),
             )
             row = dict(cur.fetchone())
     finally:
@@ -266,6 +294,9 @@ def summary(org_id: str) -> Dict[str, Any]:
                      COUNT(*) FILTER (WHERE result_status = 'fail')         AS failed,
                      COUNT(*) FILTER (WHERE result_status = 'inconclusive') AS inconclusive,
                      COUNT(*) FILTER (WHERE result_status = 'not_evaluated') AS not_evaluated,
+                     COUNT(*) FILTER (WHERE data_classification = 'synthetic')          AS synthetic,
+                     COUNT(*) FILTER (WHERE data_classification = 'deidentified')       AS deidentified,
+                     COUNT(*) FILTER (WHERE data_classification = 'production_derived') AS production_derived,
                      MAX(ingested_at)                                       AS last_ingested_at
                    FROM pilot_runs WHERE org_id = %s""",
                 (org_id,),
@@ -302,6 +333,15 @@ def summary(org_id: str) -> Dict[str, Any]:
             "inconclusive": totals.get("inconclusive") or 0,
             "not_evaluated": totals.get("not_evaluated") or 0,
         },
+        "by_data_classification": {
+            "synthetic": totals.get("synthetic") or 0,
+            "deidentified": totals.get("deidentified") or 0,
+            "production_derived": totals.get("production_derived") or 0,
+        },
+        "data_classification_note": (
+            "What data each run was scored on, as declared by the submitter. "
+            "A separate axis from verification: every run is self-reported "
+            "regardless of its data class."),
         "countries": countries,
         "country_aggregation": "reported country only; singletons suppressed",
         "last_ingested_at": last.isoformat() if last else None,
@@ -348,11 +388,18 @@ def evidence_report(org_id: str, run_id: str) -> Dict[str, Any]:
         "metrics": run.get("metrics") or {},
         "provenance": {
             "verification": run.get("verification"),
+            "data_classification": run.get("data_classification"),
             "evidence_source": run.get("evidence_source"),
             "payload_sha256": run.get("payload_sha256"),
             "integrity_note": ("The hash proves this record matches what was "
                                "submitted. It does not attest that the run "
                                "occurred or that the results are correct."),
+            "classification_note": (
+                "data_classification is the kind of data the run was scored on, "
+                "as declared by the submitter: synthetic, deidentified or "
+                "production_derived. It is a separate axis from verification — a "
+                "run on any data class is still self-reported until independently "
+                "verified — and it is never inferred."),
         },
         "limitations": [
             "Self-reported. The Tier 0 kit runs offline and sends nothing, so "
