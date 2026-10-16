@@ -133,6 +133,16 @@ committed.
 
 `nhid-clinical/.env.example` is the authoritative list and explains each one.
 
+**OAuth token exchange (`POST /saas/auth/token`) adds no environment
+variable.** By design it holds no secret: the IdP tokens it verifies are
+checked against each issuer's public JWKS (fetched over HTTPS at request
+time, nothing stored), and the tokens it issues are opaque and stored only as
+SHA-256 hashes, the same way `X-API-Key` and sessions already are. There is no
+signing key to set or rotate. An organization turns the feature on entirely
+through the API — an owner configuring an issuer at `POST
+/saas/orgs/oauth-issuers` — so an org with no issuer configured simply cannot
+exchange tokens, and the static `X-API-Key` path is unchanged either way.
+
 **The application fails closed.** It refuses to start without an admin
 credential, and refuses to start in production without `CORS_ALLOWED_ORIGINS`.
 That is deliberate: a misconfigured deployment should not serve.
