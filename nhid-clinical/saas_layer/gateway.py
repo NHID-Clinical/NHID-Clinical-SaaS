@@ -2960,6 +2960,11 @@ class PilotRunSubmission(BaseModel):
     control_decisions: Optional[Dict[str, Any]] = None
     metrics: Optional[Dict[str, Any]] = None
     reported_country: Optional[str] = None
+    # What data the run was scored on, declared by the submitter. Omitting it
+    # defaults to 'synthetic' in pilot_runs.record_run; an illegal value is
+    # refused by validate_payload (422). It is a separate axis from
+    # verification and is never inferred.
+    data_classification: Optional[str] = None
 
 
 @app.get("/saas/pilot/submission-notice", tags=["Pilot"])
@@ -2976,6 +2981,9 @@ async def pilot_submission_notice():
             "Scenario, evaluator and kit version identifiers.",
             "Execution timestamp and timezone, as you report them.",
             "Optionally, a two-letter country code if you choose to include one.",
+            "Optionally, a data classification (synthetic, deidentified or "
+            "production_derived) declaring what data you ran on; defaults to "
+            "synthetic.",
         ],
         "what_is_never_transmitted": [
             "Transcripts, turn text or any conversational content.",
@@ -3038,6 +3046,7 @@ async def pilot_submit_run(
             "run_id": run["run_id"],
             "result_status": run["result_status"],
             "verification": run["verification"],
+            "data_classification": run["data_classification"],
             "payload_sha256": run["payload_sha256"],
             "submitted_by": user["email"],
         })
@@ -3050,6 +3059,7 @@ async def pilot_submit_run(
     return {
         "run_id": run["run_id"],
         "verification": run["verification"],
+        "data_classification": run["data_classification"],
         "result_status": run["result_status"],
         "ingested_at": run["ingested_at"],
         "payload_sha256": run["payload_sha256"],
