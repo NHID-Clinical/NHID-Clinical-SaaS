@@ -8,7 +8,7 @@ Ingest the calls you already receive. Evaluate them against five deterministic c
 Keep the evidence for what happened.
 
 [![CI](https://github.com/NHID-Clinical/NHID-Clinical-SaaS/actions/workflows/ci.yml/badge.svg)](https://github.com/NHID-Clinical/NHID-Clinical-SaaS/actions)
-![Tests](https://img.shields.io/badge/tests-403%20passing-0e7a57?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-484%20passing-0e7a57?style=flat-square)
 ![Python](https://img.shields.io/badge/python-3.11-1b5e9c?style=flat-square)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-1b5e9c?style=flat-square)
 ![React](https://img.shields.io/badge/React%2018-TypeScript-53d8fb?style=flat-square)
@@ -83,12 +83,12 @@ flowchart TB
     UI[React 18 · TypeScript · Vite<br/>22 screens]
   end
   subgraph api [FastAPI gateway]
-    AUTH[API key · SHA-256<br/>magic-link session<br/>per-org scoping]
+    AUTH[API key · SHA-256<br/>magic-link session<br/>RFC 8693 token exchange<br/>per-org scoping]
     MON[monitoring.py<br/>evaluation engine]
     AUD[audit.py<br/>HMAC-SHA256 chain]
     ADM[admin console<br/>scrypt · throttled]
   end
-  DB[(PostgreSQL 16<br/>17 tables · migrated)]
+  DB[(PostgreSQL 16<br/>26 tables · 6 migrations)]
   UI -->|VITE_API_BASE_URL| AUTH
   AUTH --> MON --> DB
   MON --> AUD --> DB
@@ -97,15 +97,23 @@ flowchart TB
   style DB fill:#1b5e9c,color:#fff
 ```
 
-## Two credentials, because a pipeline is not a person
+## Three credentials, because a pipeline is not a person
 
 | | credential | used by |
 |---|---|---|
 | **machine** | organization API key, SHA-256 at rest | ingest pipelines, scripts, CI |
+| **machine, from your IdP** | RFC 8693 token exchange: an Okta / Entra / OIDC JWT buys a short-lived, revocable NHID token | backends whose security review requires every machine credential to originate from the organization's own identity provider |
 | **human** | magic-link session, httpOnly cookie | people opening `/ops` in a browser |
 
-The key is what a vendor's exporter authenticates with. The session exists for a
-narrower reason: **so a review decision carries a name.** `review_events.reviewer`
+The key is what a vendor's exporter authenticates with. The exchanged token is
+the same thing for an organization that cannot hold a static shared key: the
+IdP's JWT is verified against the IdP's public JWKS (RS256/ES256 only, checked
+before any key is fetched), its issuer and audience are bound to exactly one
+organization by a database constraint, and what comes back is **opaque and stored
+only as a hash** — no signing key to hold, rotate or leak, and revocation is a
+row delete. Every verification failure returns one identical `invalid_grant`.
+
+The session exists for a narrower reason: **so a review decision carries a name.** `review_events.reviewer`
 used to be free text the client supplied, defaulting to the literal string
 `"unknown"` — so a product built to answer *who did this, under whose authority*
 could not answer it about its own users. It now records the authenticated user,
@@ -144,7 +152,7 @@ Then open `http://localhost:3000/ops`. With no API key connected it replays the
 recorded demonstration set; connect one to evaluate your own interactions.
 
 ```bash
-python -m pytest tests/ -q      # 403 passed, 18 skipped
+python -m pytest tests/ -q      # 484 passed, 18 skipped
 python scripts/migrate.py --status
 ```
 </details>
@@ -163,10 +171,12 @@ Nothing is deployed today. That document is the procedure, not a record.
 
 | | |
 |---|---|
-| **403 passed, 18 skipped** | on a live Postgres, and again on a database built only by `scripts/migrate.py` |
+| **484 passed, 18 skipped** | on a live Postgres 16 built only by `scripts/migrate.py` (measured 2026-10-16). The 18 skips are the integration harness, which needs a running server |
 | **Workspace isolation** | 15 tests; found and fixed a real cross-org write bug |
 | **Admin surface** | 31 tests; every route refuses an unauthenticated and a fabricated token |
 | **Sign-in** | 30 tests; single-use links, no email enumeration, and a name on every review |
+| **Token exchange** | 32 tests, a negative matrix with a passing positive control: foreign key, unconfigured issuer, cross-org, `alg:none`, HS256 confusion, wrong / expired / not-yet-valid / missing claims, dangerous `jwks_uri`, deactivation, revoke / expire / purge, lockout, 12-way concurrency — each asserting the exact OAuth error body. The production verifier was never weakened to stage an attack |
+| **Pilot runs** | 34 tests; what people report is recorded as reported, never as observed, and every run carries a `data_classification` — `synthetic` (default) · `deidentified` · `production_derived` — so evidence provenance is a field, not a footnote |
 | **Migrations** | applied to an empty database in CI, asserted to actually apply |
 | **Recorded demo** | regenerated from the real engine; CI fails if the two disagree |
 
@@ -181,9 +191,13 @@ Nothing is deployed today. That document is the procedure, not a record.
   deployment compliant — that is a property of an organization and its agreements,
   not of software. Synthetic and test data only until a deployment has been
   separately validated.
-- **No passwords, no SSO.** People sign in with a link to their mailbox; there
-  is no self-service sign-up, and roles stop at `owner` / `member`. SAML, SCIM
-  and per-user API keys are not here.
+- **No passwords, no SSO for people.** People sign in with a link to their
+  mailbox; there is no self-service sign-up, and roles stop at `owner` /
+  `member`. SAML, SCIM and per-user API keys are not here. Machine credentials
+  can come from your IdP (token exchange above); a human sign-in cannot, yet.
+- **No issuer discovery.** An IdP must be configured by an owner before any of
+  its tokens are accepted; an unconfigured issuer is refused, never discovered.
+  DNS rebinding of a configured `jwks_uri` is out of scope and said so.
 
 ## Licence
 
