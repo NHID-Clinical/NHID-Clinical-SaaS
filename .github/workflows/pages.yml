@@ -6,17 +6,21 @@ name: Pages
 # vercel.json that used to sit in artifacts/nhid-saas has been removed rather
 # than kept as configuration for a provider nothing publishes through.
 #
-# No repository setting is needed: the Pages source is already GitHub Actions,
-# and this workflow is what publishes. On its first run it deployed to
-# https://nhid-clinical.github.io/NHID-Clinical-SaaS/ -- actions/deploy-pages
-# created the deployment and reported success on the first attempt, which it can
-# only do when the source is GitHub Actions.
+# THE REPOSITORY SETTING MATTERS. Settings -> Pages -> Build and deployment ->
+# Source must be "GitHub Actions". When it is "Deploy from a branch", GitHub
+# also runs its own "pages build and deployment" (Jekyll) on every push, which
+# publishes the raw repository -- README.md rendered as the home page -- and
+# whichever of the two finishes last is what the site serves. Both report
+# success, so the failure is silent: deploys "succeed" and the app does not
+# appear. On 2026-10-18 the live site was confirmed to be the Jekyll README
+# (generator: Jekyll v3.10.0), which disproved an earlier version of this
+# comment that called the source already GitHub Actions.
 #
-# A "pages build and deployment" run (dynamic/pages/pages-build-deployment) also
-# appears on main and also succeeds. It is not a competing branch build to be
-# switched off; an earlier revision of this comment claimed the source was still
-# branch-based on the strength of that run alone, and was wrong.
-#
+# Two defences while that setting is wrong:
+#   * `page_build` below re-runs this workflow after GitHub's branch build
+#     finishes, so the app is always published last and wins the race;
+#   * the "Check Pages source" step reports the misconfiguration on every run.
+
 # What gets published is the recorded demonstration: with no backend reachable
 # from Pages, the Ops screens replay output the real evaluator produced
 # (nhid-clinical/scripts/build_demo_fixture.py), and every screen says so.
@@ -24,6 +28,10 @@ name: Pages
 on:
   push:
     branches: ["main"]
+  # Fires when GitHub's own branch-based Pages build completes. Only happens
+  # while the Pages source is "Deploy from a branch"; republishing then puts
+  # the app back over the README that build just published.
+  page_build:
   workflow_dispatch:
 
 # Pages needs these; nothing here writes to the repository.
@@ -31,6 +39,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read   # the page_build gate counts earlier runs
 
 # Never let two publishes race; let a newer commit supersede an in-flight one.
 concurrency:
@@ -38,8 +47,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Only for page_build: republish at most once per commit. If GitHub ever
+  # emitted page_build for this workflow's own deploy, the trigger would loop;
+  # this makes a loop impossible rather than assuming it cannot happen.
+  gate:
+    name: Republish once per commit
+    if: github.event_name == 'page_build'
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh api "repos/${{ github.repository }}/actions/workflows/pages.yml/runs?event=page_build&head_sha=${{ github.sha }}&status=success" --jq .total_count)
+          if [ "${n:-0}" -ge 1 ]; then echo "proceed=false" >> "$GITHUB_OUTPUT"; echo "Already republished for ${{ github.sha }}."; else echo "proceed=true" >> "$GITHUB_OUTPUT"; fi
+
   build:
     name: Build the dashboard
+    needs: gate
+    if: always() && (needs.gate.result == 'skipped' || needs.gate.outputs.proceed == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +111,9 @@ jobs:
   deploy:
     name: Publish
     needs: build
+    # Explicit, because the default success() would skip this job whenever the
+    # gate upstream of build was skipped -- i.e. on every ordinary push.
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -90,3 +121,20 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Check Pages source
+        # Reports, without failing the deploy, when the repository is still set
+        # to "Deploy from a branch" -- the setting that lets the README overwrite
+        # the app (see the header comment).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          src=$(gh api "repos/${{ github.repository }}/pages" --jq .build_type 2>/dev/null || echo unknown)
+          if [ "$src" != "workflow" ]; then
+            msg="GitHub Pages source is '$src', not 'GitHub Actions'. GitHub's own branch build will keep overwriting the app with README.md. Fix: Settings -> Pages -> Build and deployment -> Source -> GitHub Actions."
+            echo "::warning title=Pages source is not GitHub Actions::$msg"
+            echo "### Pages source needs changing" >> "$GITHUB_STEP_SUMMARY"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Pages source is GitHub Actions."
+          fi
