@@ -106,18 +106,32 @@ def normalize_attestation(raw: Any) -> Dict[str, Any]:
     }
 
 
-def _turn(speaker: str, text: str, offset_ms: Any = None, at: Any = None) -> Dict[str, Any]:
+def _turn(speaker: str, text: str, offset_ms: Any = None, at: Any = None,
+          interrupted: Any = None, heard_text: Any = None) -> Dict[str, Any]:
+    """One canonical turn.
+
+    ``interrupted`` marks a turn whose playback the other party cut off (barge-
+    in). Many platforms log the full scripted line even when it was not all
+    played, so for an interrupted turn ``text`` is what the agent was going to
+    say and ``heard_text`` -- when the platform reports it -- is the part that
+    was actually played. Both are optional; absent means not reported.
+    """
     speaker = speaker if speaker in (SPEAKER_AGENT, SPEAKER_HUMAN) else SPEAKER_UNKNOWN
     try:
         offset = int(offset_ms) if offset_ms is not None else None
     except (TypeError, ValueError):
         offset = None
-    return {
+    turn = {
         "speaker": speaker,
         "text": (text or "").strip(),
         "offset_ms": offset,
         "at": _utc(at),
     }
+    if interrupted:
+        turn["interrupted"] = True
+        if heard_text is not None:
+            turn["heard_text"] = str(heard_text).strip()
+    return turn
 
 
 def canonical_interaction(
@@ -167,7 +181,8 @@ def canonical_interaction(
 def from_generic(payload: Dict[str, Any]) -> Dict[str, Any]:
     """The canonical shape itself, for customers who can export it directly."""
     turns = [
-        _turn(t.get("speaker"), t.get("text"), t.get("offset_ms"), t.get("at"))
+        _turn(t.get("speaker"), t.get("text"), t.get("offset_ms"), t.get("at"),
+              t.get("interrupted"), t.get("heard_text"))
         for t in (payload.get("turns") or [])
     ]
     return canonical_interaction(

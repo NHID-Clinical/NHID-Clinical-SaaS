@@ -101,6 +101,11 @@ export default function OpsInteractionDetail() {
                 {i === disclosureTurn && (
                   <span className="pill pill-pass" style={{ marginLeft: 8 }}>disclosure</span>
                 )}
+                {t.interrupted && (
+                  <span className="muted" style={{ display: "block", fontSize: 12, marginTop: 2 }}>
+                    Interrupted. Heard: {t.heard_text ? `“${t.heard_text}”` : "not reported"}
+                  </span>
+                )}
               </span>
             </div>
           ))}
