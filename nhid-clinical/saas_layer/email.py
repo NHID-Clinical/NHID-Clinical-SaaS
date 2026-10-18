@@ -23,6 +23,13 @@ Two backends
 ``resend`` /    an HTTPS call to that provider's send endpoint.
 ``postmark``
 
+``disabled``    no mail at all, deliberately. For a first deployment that has
+                not yet set up a sending domain: the platform administrator
+                signs in at /admin (password, no email) and organizations use
+                their API key, while email sign-in answers a plain 503 saying
+                it is not enabled. Allowed in production because it fails
+                *loudly* -- the opposite of the silent failure described below.
+
 Why it fails closed
 -------------------
 With ``APP_ENV=production`` and no sender configured, ``verify_configured()``
@@ -72,6 +79,11 @@ def _api_key() -> str:
     return (os.environ.get("EMAIL_API_KEY") or "").strip()
 
 
+def sign_in_enabled() -> bool:
+    """False when EMAIL_BACKEND=disabled: email sign-in is switched off."""
+    return backend_name() != "disabled"
+
+
 def verify_configured(*, production: bool) -> None:
     """Check the configuration is coherent, or raise.
 
@@ -80,11 +92,17 @@ def verify_configured(*, production: bool) -> None:
     fatal.
     """
     backend = backend_name()
-    if backend not in ("log", "resend", "postmark"):
+    if backend not in ("log", "resend", "postmark", "disabled"):
         raise EmailNotConfigured(
             f"EMAIL_BACKEND={backend!r} is not recognised. "
-            "Use 'log' (development), 'resend' or 'postmark'."
+            "Use 'log' (development), 'resend', 'postmark' or 'disabled'."
         )
+
+    if backend == "disabled":
+        # Not a silent failure: every sign-in request gets a 503 that says so,
+        # and this line is in the startup log.
+        _logger.warning("EMAIL: disabled -- email sign-in is OFF; admin and API-key access only")
+        return
 
     if backend == "log":
         if production:
@@ -126,6 +144,8 @@ def send_login_link(to_email: str, link: str, *, org_name: Optional[str] = None)
     )
 
     backend = backend_name()
+    if backend == "disabled":
+        raise EmailNotConfigured("Email sign-in is disabled on this deployment.")
     if backend == "log":
         # The logger records that a link went out; it must not carry the link,
         # because `log_redaction.py` would strip the token from it and rightly

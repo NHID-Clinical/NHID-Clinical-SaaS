@@ -25,7 +25,12 @@
  * is what the whole frontend did before.
  */
 
-const configured = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+const rawConfigured = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+// A bare host (what Render's `fromService: property: host` supplies) is taken
+// as https://host; a full origin or a path prefix is used as given.
+const configured = rawConfigured && !rawConfigured.startsWith("/") && !/^https?:\/\//i.test(rawConfigured)
+  ? `https://${rawConfigured}`
+  : rawConfigured;
 
 /** Origin (or path prefix) every API call is built from. Never ends in "/". */
 export const API_BASE_URL = configured ? configured.replace(/\/+$/, "") : "/saas-api";

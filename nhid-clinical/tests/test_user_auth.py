@@ -238,6 +238,26 @@ def test_production_refuses_to_start_without_a_sender(monkeypatch):
     email_svc.verify_configured(production=True)  # configured: no raise
 
 
+def test_email_sign_in_can_be_switched_off_explicitly(monkeypatch):
+    """`disabled` is a deliberate choice, unlike an unset backend.
+
+    A first deployment can run on admin and API-key access alone. It starts,
+    and the sign-in endpoint says plainly that email sign-in is off -- the
+    same answer for every address, so it is no oracle.
+    """
+    from saas_layer import email as email_svc
+
+    monkeypatch.setenv("EMAIL_BACKEND", "disabled")
+    email_svc.verify_configured(production=True)  # no raise
+    assert not email_svc.sign_in_enabled()
+
+    client = TestClient(app)
+    known = client.post("/saas/auth/request-link", json={"email": _email()})
+    malformed = client.post("/saas/auth/request-link", json={"email": "not-an-address"})
+    assert known.status_code == malformed.status_code == 503
+    assert known.json() == malformed.json()
+
+
 # ── Throttling ────────────────────────────────────────────────────────────────
 
 def test_the_throttle_locks_after_the_threshold():
