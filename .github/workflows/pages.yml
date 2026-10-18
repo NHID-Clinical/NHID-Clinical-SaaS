@@ -17,8 +17,9 @@ name: Pages
 # comment that called the source already GitHub Actions.
 #
 # Two defences while that setting is wrong:
-#   * `page_build` below re-runs this workflow after GitHub's branch build
-#     finishes, so the app is always published last and wins the race;
+#   * `page_build` below re-runs this workflow after each GitHub branch build
+#     finishes, so the app is always published last and wins the race (with a
+#     rate cap so the trigger can never loop);
 #   * the "Check Pages source" step reports the misconfiguration on every run.
 
 # What gets published is the recorded demonstration: with no backend reachable
@@ -39,7 +40,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
-  actions: read   # the page_build gate counts earlier runs
+  actions: read   # the page_build gate counts recent runs
 
 # Never let two publishes race; let a newer commit supersede an in-flight one.
 concurrency:
@@ -47,11 +48,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Only for page_build: republish at most once per commit. If GitHub ever
-  # emitted page_build for this workflow's own deploy, the trigger would loop;
-  # this makes a loop impossible rather than assuming it cannot happen.
+  # Only for page_build. Every page_build event republishes -- the app must be
+  # the last thing published after each branch build, including when two
+  # commits land close together. Deduplicating by commit is wrong here:
+  # GitHub sets GITHUB_SHA on page_build to the branch's current head, not to
+  # the commit that was built, so a second event would see the first
+  # republish and skip, letting the README win.
+  #
+  # What this does cap is a loop. If GitHub ever emitted page_build for this
+  # workflow's own deploy, the trigger would feed itself; three page_build
+  # republishes inside ten minutes is far beyond any real merge rate, so the
+  # fourth stops.
   gate:
-    name: Republish once per commit
+    name: Republish unless looping
     if: github.event_name == 'page_build'
     runs-on: ubuntu-latest
     outputs:
@@ -61,8 +70,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          n=$(gh api "repos/${{ github.repository }}/actions/workflows/pages.yml/runs?event=page_build&head_sha=${{ github.sha }}&status=success" --jq .total_count)
-          if [ "${n:-0}" -ge 1 ]; then echo "proceed=false" >> "$GITHUB_OUTPUT"; echo "Already republished for ${{ github.sha }}."; else echo "proceed=true" >> "$GITHUB_OUTPUT"; fi
+          since=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          n=$(gh api "repos/${{ github.repository }}/actions/workflows/pages.yml/runs?event=page_build&created=%3E%3D${since}&per_page=100" \
+                --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }})] | length')
+          if [ "${n:-0}" -ge 3 ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=page_build republish capped::${n} page_build runs in the last 10 minutes; not republishing again."
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     name: Build the dashboard
