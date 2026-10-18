@@ -97,6 +97,14 @@ def test_cors_origins_come_from_the_environment(monkeypatch):
     )
 
 
+def test_a_bare_host_is_taken_as_https(monkeypatch):
+    """Render's `fromService: property: host` supplies a hostname, no scheme."""
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "nhid-clinical-app.onrender.com")
+    from saas_layer.gateway import _cors_origins
+
+    assert _cors_origins() == ["https://nhid-clinical-app.onrender.com"]
+
+
 def test_cors_is_never_a_wildcard(monkeypatch):
     """A wildcard would let any page on the internet script this API."""
     from saas_layer.gateway import _cors_origins

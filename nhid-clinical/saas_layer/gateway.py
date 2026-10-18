@@ -266,7 +266,11 @@ def _cors_origins() -> List[str]:
     """
     raw = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
     if raw:
-        return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+        # A bare host (what Render's `fromService: property: host` supplies in
+        # render.yaml) is taken as https://host. Explicit schemes are kept.
+        return [o if "://" in o else f"https://{o}"
+                for o in (origin.strip().rstrip("/") for origin in raw.split(","))
+                if o]
     return [
         "http://localhost:3000", "http://127.0.0.1:3000",
         "http://localhost:5173", "http://127.0.0.1:5173",
@@ -727,6 +731,14 @@ async def auth_request_link(body: RequestLinkRequest, request: Request):
     exactly what someone probes before a phishing run at a payer's compliance
     team.
     """
+    # Switched off deliberately (EMAIL_BACKEND=disabled): say so, the same way
+    # for every address, so this is not an oracle -- it only reports a setting.
+    if not email_svc.sign_in_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Email sign-in is not enabled on this deployment yet. "
+                   "Organizations can sign in with their API key.")
+
     reply = {"status": "accepted",
              "detail": "If that address has access, a sign-in link is on its way."}
 

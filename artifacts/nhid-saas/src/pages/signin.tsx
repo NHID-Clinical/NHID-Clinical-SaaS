@@ -17,20 +17,28 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 
-import { authApi } from "@/lib/auth-api";
+import { AuthError, authApi } from "@/lib/auth-api";
 import { EntryShell, NotConnected } from "@/components/entry-shell";
 import { API_CONNECTED } from "@/lib/config";
 
 export default function SignIn() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  // Set only when the deployment has email sign-in switched off (503). That
+  // answer is the same for every address, so showing it reveals nothing.
+  const [disabled, setDisabled] = useState<string | null>(null);
 
   const request = useMutation({
     mutationFn: (address: string) => authApi.requestLink(address),
     // Both paths land here on purpose. Even a transport failure shows the
     // confirmation rather than "that address isn't registered", which is a
     // sentence this product must never be able to produce.
-    onSettled: () => setSent(true),
+    onError: (error) => {
+      if (error instanceof AuthError && error.status === 503) setDisabled(error.message);
+    },
+    onSettled: (_data, error) => {
+      if (!(error instanceof AuthError && error.status === 503)) setSent(true);
+    },
   });
 
   return (
@@ -41,6 +49,10 @@ export default function SignIn() {
 
         {!API_CONNECTED ? (
           <NotConnected what="email sign-in" />
+        ) : disabled ? (
+          <div className="notice notice-demo" style={{ marginTop: 16 }} role="status">
+            <span>{disabled}</span>
+          </div>
         ) : sent ? (
           <>
             <p className="muted" style={{ marginTop: 0 }}>
