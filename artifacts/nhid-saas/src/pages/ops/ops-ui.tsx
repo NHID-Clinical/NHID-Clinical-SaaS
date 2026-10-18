@@ -17,109 +17,82 @@ import { CHART_CSS } from "./ops-charts";
 
 export const OPS_CSS = `
 .ops {
-  --ops-bg:        #f7f8fa;
-  --ops-surface:   #ffffff;
-  --ops-border:    #dfe3e8;
-  --ops-ink:       #1f2933;
-  --ops-muted:     #5c6b7a;
-  --ops-faint:     #8895a3;
-  --ops-blue:      #1b5e9c;
-  --ops-blue-soft: #eaf1f8;
-  --ops-exception: #9c2a1b;
-  --ops-exception-soft: #fbecea;
-  --ops-unknown:   #8a6d1f;
-  --ops-unknown-soft: #fbf4e2;
-  --ops-pass:      #1f6b45;
-  --ops-pass-soft: #eaf4ee;
-  background: var(--ops-bg);
-  color: var(--ops-ink);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  min-height: 100%;
-  padding: 24px;
+  --ops-bg: #f3f6f9; --ops-surface: #fff; --ops-border: #d9e1ea;
+  --ops-ink: #172b4d; --ops-muted: #526579; --ops-faint: #74869a;
+  --ops-blue: #1769aa; --ops-blue-soft: #eaf3fb;
+  --ops-exception: #a52b24; --ops-exception-soft: #fff0ef;
+  --ops-unknown: #825d0b; --ops-unknown-soft: #fff7e3;
+  --ops-pass: #216e4a; --ops-pass-soft: #e7f5ec; --ops-focus: #2684ff;
+  background: var(--ops-bg); color: var(--ops-ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px; line-height: 1.55; min-height: 100%;
+  padding: clamp(16px, 2.4vw, 30px);
 }
-.ops h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
-.ops h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+.ops * { box-sizing: border-box; }
+.ops h1 { font-size: clamp(22px, 2vw, 28px); line-height: 1.2; font-weight: 650; margin: 0; letter-spacing: -.035em; color: #102a43; }
+.ops h2 { font-size: 15px; line-height: 1.35; font-weight: 650; margin: 0 0 12px; letter-spacing: -.01em; }
+.ops h3 { font-size: 13px; font-weight: 650; margin: 0 0 8px; }
 .ops a { color: var(--ops-blue); text-decoration: none; }
-.ops a:hover { text-decoration: underline; }
-.ops .sub { color: var(--ops-muted); font-size: 13px; margin-bottom: 20px; }
-.ops .card {
-  background: var(--ops-surface); border: 1px solid var(--ops-border);
-  border-radius: 10px; padding: 18px 20px; margin-bottom: 16px;
-  box-shadow: 0 1px 2px rgba(16,32,56,0.04);
-}
-.ops .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
-.ops .metric {
-  position: relative; background: var(--ops-surface);
-  border: 1px solid var(--ops-border); border-radius: 10px; padding: 15px 16px 14px;
-  box-shadow: 0 1px 2px rgba(16,32,56,0.04);
-  transition: box-shadow 140ms ease, transform 140ms ease;
-}
-/* A teal rule along the top edge, tying the light content area back to the
-   brand colour that owns the sidebar. Purely decorative: it encodes nothing,
-   so it is identical on every tile. */
-.ops .metric::before {
-  content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
-  border-radius: 10px 10px 0 0;
-  background: linear-gradient(90deg, #00c2a8, #53d8fb);
-  opacity: 0.85;
-}
-.ops .metric:hover { box-shadow: 0 3px 10px rgba(16,32,56,0.08); transform: translateY(-1px); }
-.ops .metric .label { font-size: 11px; color: var(--ops-muted); text-transform: uppercase;
-  letter-spacing: 0.06em; margin-bottom: 7px; font-weight: 600; }
-.ops .metric .value { font-size: 27px; font-weight: 650; font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em; line-height: 1.15; }
-.ops .metric .denom { font-size: 12px; color: var(--ops-faint); margin-top: 4px;
-  font-variant-numeric: tabular-nums; }
-.ops table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.ops th { text-align: left; font-weight: 600; font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--ops-muted); padding: 8px 10px;
-  border-bottom: 1px solid var(--ops-border); white-space: nowrap; }
-.ops td { padding: 9px 10px; border-bottom: 1px solid #eef0f3; vertical-align: top;
-  font-variant-numeric: tabular-nums; }
-.ops tr:hover td { background: #fafbfc; }
-.ops .pill { display: inline-block; padding: 2px 8px; border-radius: 10px;
-  font-size: 11px; font-weight: 600; white-space: nowrap; }
-.ops .pill-pass { background: var(--ops-pass-soft); color: var(--ops-pass); }
-.ops .pill-exception { background: var(--ops-exception-soft); color: var(--ops-exception); }
-.ops .pill-unknown { background: var(--ops-unknown-soft); color: var(--ops-unknown); }
-.ops .pill-neutral { background: #eef0f3; color: var(--ops-muted); }
-.ops .pill-blue { background: var(--ops-blue-soft); color: var(--ops-blue); }
-.ops .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
-.ops input, .ops select, .ops textarea {
-  border: 1px solid var(--ops-border); border-radius: 4px; padding: 6px 9px;
-  font-size: 13px; background: var(--ops-surface); color: var(--ops-ink); font-family: inherit;
-}
-.ops button {
-  border: 1px solid var(--ops-border); background: var(--ops-surface); color: var(--ops-ink);
-  border-radius: 4px; padding: 6px 12px; font-size: 13px; cursor: pointer; font-family: inherit;
-}
+.ops a:hover { color: #0b4f86; text-decoration: underline; }
+.ops button, .ops input, .ops select, .ops textarea { font: inherit; }
+.ops :focus-visible { outline: 2px solid var(--ops-focus); outline-offset: 2px; }
+.ops .eyebrow { font-size: 10px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; color: #61778d; margin-bottom: 7px; }
+.ops .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
+.ops .page-head-copy { min-width: 0; }
+.ops .sub { color: var(--ops-muted); font-size: 13px; margin: 7px 0 0; max-width: 760px; }
+.ops .page-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.ops .card { background: var(--ops-surface); border: 1px solid var(--ops-border); border-radius: 8px; padding: 18px 20px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(16,42,67,.035); }
+.ops .card > :last-child { margin-bottom: 0; }
+.ops .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 205px), 1fr)); }
+.ops .metric { position: relative; min-width: 0; background: var(--ops-surface); border: 1px solid var(--ops-border); border-radius: 8px; padding: 16px 17px 15px; box-shadow: 0 1px 2px rgba(16,42,67,.035); transition: border-color 140ms ease, box-shadow 140ms ease; }
+.ops .metric::before { content: none; }
+.ops .metric:hover { border-color: #b8c9d9; box-shadow: 0 3px 10px rgba(16,42,67,.07); transform: none; }
+.ops .metric .label { font-size: 11px; line-height: 1.4; color: var(--ops-muted); margin-bottom: 9px; font-weight: 650; letter-spacing: .015em; text-transform: none; }
+.ops .metric .value { font-size: clamp(24px, 2vw, 30px); font-weight: 680; color: #173b5e; font-variant-numeric: tabular-nums; letter-spacing: -.035em; line-height: 1.15; overflow-wrap: anywhere; }
+.ops .metric .denom { font-size: 11px; line-height: 1.45; color: var(--ops-faint); margin-top: 7px; font-variant-numeric: tabular-nums; }
+.ops .nav { display: flex; gap: 2px; margin: 0 0 18px; border-bottom: 1px solid #ccd7e2; overflow-x: auto; scrollbar-width: thin; }
+.ops .nav a { position: relative; display: inline-flex; align-items: center; white-space: nowrap; padding: 10px 13px 12px; font-size: 12px; font-weight: 550; color: #526579; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+.ops .nav a:hover { color: #173b5e; text-decoration: none; background: rgba(255,255,255,.65); }
+.ops .nav a.active { color: var(--ops-blue); border-bottom-color: var(--ops-blue); font-weight: 700; }
+.ops table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.ops .card:has(> table), .ops .table-wrap { overflow-x: auto; }
+.ops th { position: sticky; top: 0; text-align: left; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: .055em; color: #61778d; padding: 10px 12px; background: #f6f8fb; border-top: 1px solid var(--ops-border); border-bottom: 1px solid var(--ops-border); white-space: nowrap; }
+.ops th:first-child { border-top-left-radius: 5px; } .ops th:last-child { border-top-right-radius: 5px; }
+.ops td { padding: 11px 12px; border-bottom: 1px solid #e9eef3; vertical-align: top; font-variant-numeric: tabular-nums; }
+.ops tbody tr:last-child td { border-bottom: 0; } .ops tbody tr:hover td { background: #f7faff; }
+.ops .pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 5px; font-size: 10px; line-height: 1.35; font-weight: 750; white-space: nowrap; border: 1px solid transparent; }
+.ops .pill-pass { background: var(--ops-pass-soft); color: var(--ops-pass); border-color: #c9e8d5; }
+.ops .pill-exception { background: var(--ops-exception-soft); color: var(--ops-exception); border-color: #f1d0cd; }
+.ops .pill-unknown { background: var(--ops-unknown-soft); color: var(--ops-unknown); border-color: #efdfb3; }
+.ops .pill-neutral { background: #eef2f6; color: #526579; border-color: #e0e7ee; }
+.ops .pill-blue { background: var(--ops-blue-soft); color: var(--ops-blue); border-color: #c9dff2; }
+.ops .toolbar { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.ops input, .ops select, .ops textarea { min-height: 36px; border: 1px solid #cbd6e2; border-radius: 5px; padding: 7px 10px; font-size: 12.5px; background: #fff; color: var(--ops-ink); font-family: inherit; max-width: 100%; }
+.ops input::placeholder, .ops textarea::placeholder { color: #8292a3; }
+.ops textarea { line-height: 1.55; resize: vertical; }
+.ops button { border: 1px solid #cbd6e2; background: #fff; color: #27445f; border-radius: 5px; padding: 8px 12px; font-size: 12px; font-weight: 650; cursor: pointer; font-family: inherit; min-height: 34px; }
+.ops button:hover:not(:disabled) { background: #f5f9fd; border-color: #aebfd0; }
 .ops button.primary { background: var(--ops-blue); border-color: var(--ops-blue); color: #fff; }
-.ops button:disabled { opacity: 0.5; cursor: not-allowed; }
-.ops .nav { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--ops-border); }
-.ops .nav a { padding: 8px 14px; font-size: 13px; color: var(--ops-muted);
-  border-bottom: 2px solid transparent; }
-.ops .nav a.active { color: var(--ops-blue); border-bottom-color: var(--ops-blue); font-weight: 600; }
-.ops .notice { background: var(--ops-unknown-soft); border: 1px solid #e8d9a8;
-  border-left: 3px solid #c99a1e;
-  border-radius: 8px; padding: 11px 15px; font-size: 13px; margin-bottom: 16px;
-  color: #6b5514; line-height: 1.55; }
-/* The standing demo banner is a condition of the whole session, not an alert
-   about the page, so it is quieter than a finding-level notice. */
-.ops .notice-demo { background: #f4f7fb; border-color: #dbe4ee;
-  border-left-color: var(--ops-blue); color: #2c4a63; }
-.ops .transcript { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
-.ops .turn { display: grid; grid-template-columns: 74px 56px 1fr; gap: 10px;
-  padding: 7px 0; border-bottom: 1px solid #eef0f3; }
-.ops .turn .who { font-weight: 600; font-size: 11px; text-transform: uppercase; }
-.ops .turn .who.agent { color: var(--ops-blue); }
-.ops .turn .who.human { color: var(--ops-muted); }
-.ops .muted { color: var(--ops-muted); }
-.ops .empty { padding: 40px; text-align: center; color: var(--ops-faint); }
-.ops dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; }
-.ops dl.kv dt { color: var(--ops-muted); font-size: 12px; }
-.ops dl.kv dd { margin: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.ops button.primary:hover:not(:disabled) { background: #0e568f; border-color: #0e568f; }
+.ops button:disabled { opacity: .48; cursor: not-allowed; }
+.ops .notice { background: var(--ops-unknown-soft); border: 1px solid #ead7a2; border-left: 3px solid #c99a1e; border-radius: 6px; padding: 12px 15px; font-size: 12px; margin-bottom: 16px; color: #624e17; line-height: 1.6; }
+.ops .notice-demo { display: flex; align-items: flex-start; gap: 8px; background: #edf5fc; border-color: #c9dff2; border-left-color: var(--ops-blue); color: #294f70; }
+.ops .notice-demo strong:first-child { white-space: nowrap; }
+.ops .transcript { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.ops .turn { display: grid; grid-template-columns: 62px 62px minmax(0, 1fr); gap: 10px; padding: 10px 0; border-bottom: 1px solid #e9eef3; overflow-wrap: anywhere; }
+.ops .turn:last-child { border-bottom: 0; } .ops .turn .who { font-weight: 750; font-size: 10px; text-transform: uppercase; }
+.ops .turn .who.agent { color: var(--ops-blue); } .ops .turn .who.human { color: var(--ops-muted); }
+.ops .muted { color: var(--ops-muted); } .ops .empty { padding: 44px 24px; text-align: center; color: var(--ops-faint); }
+.ops dl.kv { display: grid; grid-template-columns: minmax(100px, max-content) minmax(0, 1fr); gap: 9px 20px; margin: 0; }
+.ops dl.kv dt { color: var(--ops-muted); font-size: 11px; font-weight: 600; }
+.ops dl.kv dd { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .ops { padding: 16px 12px; } .ops .page-head { display: block; }
+  .ops .page-actions { justify-content: flex-start; margin-top: 14px; }
+  .ops .card { padding: 15px 13px; } .ops .nav a { padding: 10px 11px 12px; }
+  .ops .turn { grid-template-columns: 46px 52px minmax(0, 1fr); gap: 6px; }
+  .ops dl.kv { grid-template-columns: 1fr; gap: 3px; } .ops dl.kv dd { margin-bottom: 9px; }
+}
 `;
 
 const TABS = [
@@ -137,11 +110,20 @@ export function OpsShell({
   return (
     <div className="ops">
       <style>{OPS_CSS}{CHART_CSS}</style>
-      <h1>{title}</h1>
-      {subtitle && <div className="sub">{subtitle}</div>}
-      <nav className="nav">
+      <div className="page-head">
+        <div className="page-head-copy">
+          <div className="eyebrow">NHID Clinical / Governance workspace</div>
+          <h1>{title}</h1>
+          {subtitle && <div className="sub">{subtitle}</div>}
+        </div>
+        <div className="page-actions">
+          {active !== "/ops/interactions" && <Link href="/ops/interactions"><button type="button">Browse interactions</button></Link>}
+          {active !== "/ops/assessments" && <Link href="/ops/assessments"><button type="button" className="primary">+ New assessment</button></Link>}
+        </div>
+      </div>
+      <nav className="nav" aria-label="Governance workspace">
         {TABS.map((t) => (
-          <Link key={t.href} href={t.href} className={active === t.href ? "active" : ""}>
+          <Link key={t.href} href={t.href} className={active === t.href ? "active" : ""} aria-current={active === t.href ? "page" : undefined}>
             {t.label}
           </Link>
         ))}

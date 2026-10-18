@@ -12,11 +12,11 @@ const NHIDLogoMark = ({ size = 32 }: { size?: number }) => (
   <div
     style={{
       width: size, height: size, borderRadius: Math.round(size * 0.28),
-      background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
+      background: "#1769aa",
       display: "flex", alignItems: "center", justifyContent: "center",
       flexShrink: 0,
-      boxShadow: "0 0 16px rgba(0,194,168,0.4)",
-      fontFamily: "'Raleway', sans-serif",
+      boxShadow: "0 2px 6px rgba(23,105,170,0.18)",
+      fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
       fontWeight: 900,
       fontSize: Math.round(size * 0.44),
       color: "#070c17",
@@ -40,7 +40,7 @@ const NAV_ITEMS = [
 ];
 
 function StatusDot({ status }: { status: "up" | "down" | "unknown" }) {
-  const color = status === "up" ? "#00c2a8" : status === "down" ? "#ef4444" : "#94a3b8";
+  const color = status === "up" ? "#1769aa" : status === "down" ? "#ef4444" : "#94a3b8";
   return (
     <span
       style={{
@@ -141,14 +141,14 @@ function SidebarContent({
     <div
       style={{
         display: "flex", flexDirection: "column", height: "100%",
-        background: "linear-gradient(180deg, rgba(0,194,168,0.05) 0%, transparent 35%)",
+        background: "#ffffff",
       }}
     >
       {/* Logo */}
       <div
         style={{
           padding: "22px 20px 18px",
-          borderBottom: "1px solid var(--nhid-border)",
+          borderBottom: "1px solid #dfe5ec",
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}
       >
@@ -158,14 +158,14 @@ function SidebarContent({
             <div
               style={{
                 fontWeight: 800, fontSize: 13, letterSpacing: "0.04em",
-                color: "var(--nhid-text)", lineHeight: 1.2,
+                color: "#172b4d", lineHeight: 1.2,
               }}
             >
               NHID Clinical
             </div>
             <div
               style={{
-                fontSize: 9, fontWeight: 600, color: "var(--nhid-muted)",
+                fontSize: 9, fontWeight: 600, color: "#5f6b7a",
                 letterSpacing: "0.14em", textTransform: "uppercase",
               }}
             >
@@ -178,7 +178,7 @@ function SidebarContent({
             onClick={onClose}
             style={{
               background: "none", border: "none", cursor: "pointer",
-              color: "var(--nhid-muted)", padding: 4,
+              color: "#5f6b7a", padding: 4,
             }}
           >
             <X size={16} />
@@ -192,19 +192,19 @@ function SidebarContent({
           <div
             style={{
               background: "var(--nhid-surface)",
-              border: "1px solid var(--nhid-border)",
+              border: "1px solid #dfe5ec",
               borderRadius: 10, padding: "10px 12px",
             }}
           >
-            <div style={{ fontSize: 10, color: "var(--nhid-muted)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600 }}>
+            <div style={{ fontSize: 10, color: "#5f6b7a", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600 }}>
               Workspace
             </div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--nhid-text)", marginBottom: 3 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#172b4d", marginBottom: 3 }}>
               {orgName || "Loading…"}
             </div>
             <div
               style={{
-                fontSize: 9, fontFamily: "monospace", color: "var(--nhid-teal)",
+                fontSize: 9, fontFamily: "monospace", color: "#1769aa",
                 opacity: 0.8,
               }}
             >
@@ -229,9 +229,9 @@ function SidebarContent({
                 display: "flex", alignItems: "center", gap: 10,
                 padding: "9px 12px", borderRadius: 9, marginBottom: 2,
                 textDecoration: "none",
-                background: isActive ? "rgba(0,194,168,0.12)" : "transparent",
-                border: `1px solid ${isActive ? "rgba(0,194,168,0.28)" : "transparent"}`,
-                color: isActive ? "var(--nhid-teal)" : "var(--nhid-muted)",
+                background: isActive ? "rgba(23,105,170,0.09)" : "transparent",
+                border: `1px solid ${isActive ? "rgba(23,105,170,0.25)" : "transparent"}`,
+                color: isActive ? "#1769aa" : "#5f6b7a",
                 transition: "all 0.15s ease",
                 cursor: "pointer",
               }}
@@ -251,7 +251,7 @@ function SidebarContent({
                   {item.name}
                 </div>
                 {!isActive && (
-                  <div style={{ fontSize: 9, color: "var(--nhid-muted)", opacity: 0.6, marginTop: 1 }}>
+                  <div style={{ fontSize: 9, color: "#5f6b7a", opacity: 0.6, marginTop: 1 }}>
                     {item.desc}
                   </div>
                 )}
@@ -260,8 +260,8 @@ function SidebarContent({
                 <span
                   style={{
                     width: 5, height: 5, borderRadius: "50%",
-                    background: "var(--nhid-teal)",
-                    boxShadow: "0 0 6px var(--nhid-teal)",
+                    background: "#1769aa",
+                    boxShadow: "0 0 6px #1769aa",
                     flexShrink: 0,
                   }}
                 />
@@ -279,9 +279,9 @@ function SidebarContent({
               display: "flex", alignItems: "center", gap: 10,
               padding: "9px 12px", borderRadius: 9, marginBottom: 2,
               textDecoration: "none",
-              background: "rgba(0,194,168,0.07)",
-              border: "1px solid rgba(0,194,168,0.18)",
-              color: "#00c2a8",
+              background: "rgba(23,105,170,0.055)",
+              border: "1px solid rgba(23,105,170,0.18)",
+              color: "#1769aa",
               transition: "all 0.15s ease",
               cursor: "pointer",
             }}
@@ -304,9 +304,9 @@ function SidebarContent({
               display: "flex", alignItems: "center", gap: 10,
               padding: "9px 12px", borderRadius: 9,
               textDecoration: "none",
-              background: location === "/admin" ? "rgba(83,216,251,0.1)" : "transparent",
-              border: `1px solid ${location === "/admin" ? "rgba(83,216,251,0.25)" : "transparent"}`,
-              color: location === "/admin" ? "var(--nhid-cyan)" : "var(--nhid-muted)",
+              background: location === "/admin" ? "rgba(36,119,200,0.09)" : "transparent",
+              border: `1px solid ${location === "/admin" ? "rgba(36,119,200,0.25)" : "transparent"}`,
+              color: location === "/admin" ? "#2477c8" : "#5f6b7a",
               transition: "all 0.15s ease",
               cursor: "pointer",
             }}
@@ -314,7 +314,7 @@ function SidebarContent({
             <LogIn size={14} style={{ flexShrink: 0, opacity: 0.7 }} />
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13, fontWeight: 500 }}>Admin</div>
-              <div style={{ fontSize: 9, color: "var(--nhid-muted)", opacity: 0.6, marginTop: 1 }}>Operations console</div>
+              <div style={{ fontSize: 9, color: "#5f6b7a", opacity: 0.6, marginTop: 1 }}>Operations console</div>
             </div>
             <ChevronRight size={11} style={{ opacity: 0.4 }} />
           </Link>
@@ -327,8 +327,8 @@ function SidebarContent({
               width: "100%", display: "flex", alignItems: "center", gap: 10,
               padding: "9px 12px", borderRadius: 9, marginTop: 2,
               background: "none", border: "1px solid transparent",
-              color: "var(--nhid-muted)", cursor: "pointer",
-              textAlign: "left", fontFamily: "'Raleway', sans-serif",
+              color: "#5f6b7a", cursor: "pointer",
+              textAlign: "left", fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
               transition: "all 0.15s ease",
             }}
             onMouseEnter={e => {
@@ -339,7 +339,7 @@ function SidebarContent({
             onMouseLeave={e => {
               (e.currentTarget as HTMLButtonElement).style.background = "none";
               (e.currentTarget as HTMLButtonElement).style.borderColor = "transparent";
-              (e.currentTarget as HTMLButtonElement).style.color = "var(--nhid-muted)";
+              (e.currentTarget as HTMLButtonElement).style.color = "#5f6b7a";
             }}
           >
             <LogOut size={14} style={{ flexShrink: 0, opacity: 0.7 }} />
@@ -355,12 +355,12 @@ function SidebarContent({
       <div
         style={{
           padding: "14px 16px",
-          borderTop: "1px solid var(--nhid-border)",
+          borderTop: "1px solid #dfe5ec",
         }}
       >
         <div
           style={{
-            fontSize: 9, color: "var(--nhid-muted)", textTransform: "uppercase",
+            fontSize: 9, color: "#5f6b7a", textTransform: "uppercase",
             letterSpacing: "0.12em", fontWeight: 700, marginBottom: 10,
           }}
         >
@@ -374,12 +374,12 @@ function SidebarContent({
               marginBottom: 7,
             }}
           >
-            <span style={{ fontSize: 11, color: "var(--nhid-muted)" }}>{s.label}</span>
+            <span style={{ fontSize: 11, color: "#5f6b7a" }}>{s.label}</span>
             <span
               style={{
                 display: "flex", alignItems: "center", gap: 5,
                 fontSize: 10,
-                color: s.status === "up" ? "#00c2a8" : s.status === "down" ? "#ef4444" : "#94a3b8",
+                color: s.status === "up" ? "#1769aa" : s.status === "down" ? "#ef4444" : "#94a3b8",
                 fontWeight: 700,
                 letterSpacing: "0.06em",
               }}
@@ -409,13 +409,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      style={{ display: "flex", minHeight: "100dvh", width: "100%", background: "var(--nhid-bg)" }}
+      style={{ display: "flex", minHeight: "100dvh", width: "100%", background: "#f4f6f9" }}
     >
       {/* Desktop sidebar */}
       <aside
         style={{
           width: 230, flexShrink: 0,
-          borderRight: "1px solid var(--nhid-border)",
+          borderRight: "1px solid #dfe5ec",
           display: "flex", flexDirection: "column",
           position: "sticky", top: 0, height: "100dvh",
           overflowY: "auto",
@@ -440,8 +440,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
           />
           <aside
             style={{
-              width: 240, background: "var(--nhid-bg)",
-              borderLeft: "1px solid var(--nhid-border)",
+              width: 240, background: "#f4f6f9",
+              borderLeft: "1px solid #dfe5ec",
               height: "100%", overflowY: "auto",
               display: "flex", flexDirection: "column",
             }}
@@ -461,8 +461,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <header
           style={{
             height: 56, flexShrink: 0,
-            borderBottom: "1px solid var(--nhid-border)",
-            background: "rgba(7,12,23,0.85)",
+            borderBottom: "1px solid #dfe5ec",
+            background: "rgba(255,255,255,0.96)",
             backdropFilter: "blur(12px)",
             display: "flex", alignItems: "center",
             padding: "0 20px", gap: 12,
@@ -474,7 +474,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             onClick={() => setMobileOpen(true)}
             style={{
               background: "none", border: "none", cursor: "pointer",
-              color: "var(--nhid-muted)", padding: 4,
+              color: "#5f6b7a", padding: 4,
             }}
             className="md:hidden"
           >
@@ -493,10 +493,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <div
               style={{
                 display: "flex", alignItems: "center", gap: 6,
-                fontSize: 11, color: "var(--nhid-muted)",
+                fontSize: 11, color: "#5f6b7a",
               }}
             >
-              <Activity size={11} style={{ color: "#00c2a8" }} />
+              <Activity size={11} style={{ color: "#1769aa" }} />
               <span style={{ fontFamily: "monospace", fontSize: 10 }}>
                 {apiKey ? `•••${apiKey.slice(-4)}` : "—"}
               </span>
@@ -509,7 +509,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               className="md:hidden"
               style={{
                 background: "none", border: "none", cursor: "pointer",
-                color: "var(--nhid-muted)", padding: 4,
+                color: "#5f6b7a", padding: 4,
               }}
             >
               <LogOut size={15} />
