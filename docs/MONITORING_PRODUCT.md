@@ -61,6 +61,27 @@ and it still raises a finding, because it is exactly the thing a human should lo
   an unattested one raises a finding rather than being quietly treated as fine.
 - **No legal conclusions.** Findings are *governance exceptions*, not regulatory violations.
 
+## A disclosure counts only if it was heard
+
+Many voice platforms log the whole scripted line even when the caller cut in and playback
+stopped part-way. A transcript reading "I'm an automated assistant" therefore does not show the
+words were heard. A turn may carry two optional fields:
+
+| Field | Meaning |
+|---|---|
+| `interrupted` | `true` when playback of this turn was cut off by the other party (barge-in) |
+| `heard_text` | for an interrupted turn, the part actually played, when the platform reports it |
+
+An interrupted agent turn counts as the disclosure only if `heard_text` itself contains it.
+Interrupted with no `heard_text` does not count — the record cannot show the words were heard.
+IDG-01 then reports the disclosure as missing (or late, if the agent repeated it), and PDX-01
+flags any protected-data request made before a disclosure that was heard. The interaction
+detail screen marks interrupted turns and what was heard. The facts carry
+`interrupted_disclosure_turns`.
+
+The generic upload format accepts both fields today. The Twilio and Vapi adapters do not yet map
+those platforms' native interruption data; that mapping should be built against real exports.
+
 ## The ASR dependency, stated plainly
 
 Controls read text. A disclosure that was spoken but mis-transcribed reads as a missing

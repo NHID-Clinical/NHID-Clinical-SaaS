@@ -37,6 +37,10 @@ The **monitoring product** (`saas_layer/monitoring.py`) evaluates four controls 
 **IDG-01, PDX-01, EIT-01, ATR-01** — and returns one of four results for each:
 `pass`, `exception`, `unknown`, `not_assessable`.
 
+IDG-01 credits a disclosure only if it was heard: an agent turn marked `interrupted` counts only
+when its `heard_text` contains the disclosure. See
+[`../docs/MONITORING_PRODUCT.md`](../docs/MONITORING_PRODUCT.md#a-disclosure-counts-only-if-it-was-heard).
+
 **DBC-01 is not part of the monitoring product.** It is evaluated only by the
 older real-time voice-webhook path (`saas_layer/voice_policy.py`), whose
 `check_deceptive_artifacts` reads an `audio_artifacts` list supplied in the

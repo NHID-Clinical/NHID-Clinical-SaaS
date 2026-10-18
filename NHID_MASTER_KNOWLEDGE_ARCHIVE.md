@@ -638,10 +638,20 @@ disclosure_timestamp is not None AND identity_assertion_text.strip() != ""
 # Fail condition  
 disclosure_timestamp is None  # → PolicyAction.DISCLOSE_IDENTITY
 identity_assertion_text == ""  # → PolicyAction.CONTINUE_AI + MAJOR violation
+disclosure_interrupted and not heard(disclosure_heard_text)
+                               # → IDG01_DISCLOSURE_INTERRUPTED, DISCLOSE_IDENTITY (CRITICAL)
 ```
 
 **TwiML fallback on failure:**
 > "Hello. I am an automated system. I am not a human representative. How can I help you today?"
+
+**A disclosure counts only if it was heard.** Platforms often log the full scripted line even when
+the counterparty barged in before it finished. When `disclosure_interrupted` is set, the disclosure
+counts only if `disclosure_heard_text` (the part actually played) states a non-human identity;
+interrupted with no heard text does not count. PDX-01 keeps protected data gated until a heard
+disclosure. This is in the framework engine (NHID-Clinical#412) and the monitoring product
+(`saas_layer/monitoring.py`, turn fields `interrupted` / `heard_text`); the vendored
+`nhid-clinical/src/` snapshot lags the framework and does not carry it.
 
 **PDX-01 — Pre-Data Exchange Gate**
 
