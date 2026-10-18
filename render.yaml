@@ -19,16 +19,19 @@ services:
   - type: web
     name: nhid-clinical-api
     runtime: python
-    plan: starter          # free instances sleep, and a sleeping API looks broken
+    # Free to start. A free instance sleeps after ~15 minutes idle and takes
+    # about a minute to wake on the next request. Switch to `starter` (and move
+    # the migration back to a preDeployCommand) before real customers use it.
+    plan: free
     rootDir: nhid-clinical
     buildCommand: pip install -r requirements.txt
-    # Migrations run as a release step, before any worker starts, so the schema
-    # is settled exactly once rather than raced by every booting worker.
-    preDeployCommand: python scripts/migrate.py
-    startCommand: uvicorn saas_main:app --host 0.0.0.0 --port $PORT
+    # The free plan has no preDeployCommand, so migrations run just before the
+    # server starts. Safe here: one instance, one uvicorn worker, and an
+    # up-to-date schema makes migrate.py a no-op.
+    startCommand: python scripts/migrate.py && uvicorn saas_main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
-      # Schema is applied by preDeployCommand above, so workers must not also
+      # Schema is applied by migrate.py in startCommand above, so workers must not also
       # issue DDL on import. See saas_layer/migrations.py.
       - key: NHID_SKIP_SCHEMA_BOOTSTRAP
         value: "1"
