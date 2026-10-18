@@ -58,7 +58,7 @@ jobs:
 
       - name: Apply migrations to a fresh database
         working-directory: nhid-clinical
-        # This is the exact command render.yaml runs as its preDeployCommand.
+        # This is the exact migration command render.yaml runs before starting the API.
         #
         # It must come BEFORE any step that imports saas_layer.gateway, because
         # importing it runs ensure_schema() and applies the baseline. Placed
