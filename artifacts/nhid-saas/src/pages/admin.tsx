@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Shield, LogOut, RefreshCw, Eye, EyeOff, Users, Activity, AlertCircle, Lock, PhoneCall } from "lucide-react";
+import { LogOut, RefreshCw, Eye, EyeOff, Users, Activity, AlertCircle, Lock, PhoneCall } from "lucide-react";
 import { API_BASE_URL, API_CONNECTED } from "@/lib/config";
 import { Link } from "wouter";
 import { EntryShell, NotConnected } from "@/components/entry-shell";
+import { Metric, OPS_CSS } from "./ops/ops-ui";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -103,29 +104,6 @@ function fmtHours(h: number): string {
   const remHrs = Math.floor(h % 24);
   return remHrs > 0 ? `${days}d ${remHrs}h` : `${days}d`;
 }
-function expiryColor(h: number): string {
-  if (h < 2) return "#f87171";
-  if (h < 6) return "#fbbd24";
-  if (h < 12) return "#53d8fb";
-  return "#475569";
-}
-const planColor = (p: string) => ({ free: "#94a3b8", l1: "#00c2a8", l2: "#53d8fb", l3: "#fbbd24" }[p] ?? "#94a3b8");
-const statusColor = (s: string) => ({ active: "#3fb950", canceled: "#f85149", past_due: "#d29922" }[s] ?? "#94a3b8");
-
-// ── Logo Mark ─────────────────────────────────────────────────────────────────
-
-const NHIDMark = ({ size = 32 }: { size?: number }) => (
-  <div style={{
-    width: size, height: size, borderRadius: Math.round(size * 0.28),
-    background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    boxShadow: "0 0 16px rgba(0,194,168,0.4)",
-    fontSize: Math.round(size * 0.44), fontWeight: 900, color: "#070c17",
-    fontFamily: "'Raleway', sans-serif", flexShrink: 0, userSelect: "none",
-    letterSpacing: "-0.02em",
-  }}>N</div>
-);
-
 // ── Login Form ────────────────────────────────────────────────────────────────
 
 function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
@@ -248,21 +226,31 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
 
 // ── Admin Dashboard ────────────────────────────────────────────────────────────
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div style={{
-      background: "rgba(255,255,255,0.03)", border: "1px solid rgba(0,194,168,0.12)",
-      borderRadius: 12, padding: "18px 20px",
-    }}>
-      <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#7a8fa8", marginBottom: 8 }}>
-        {label}
-      </div>
-      <div style={{ fontSize: 28, fontWeight: 800, color: "#e0e8f4", letterSpacing: "-0.02em" }}>
-        {value}
-      </div>
-    </div>
-  );
-}
+const CONSOLE_CSS = `
+.console-bar { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 24px; background: #102a43; color: #fff; position: sticky; top: 0; z-index: 20; }
+.console-bar .mark { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; background: #1769aa; font-weight: 800; font-size: 14px; }
+.console-bar .title { font-weight: 650; }
+.console-bar .tag { font-size: 10px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; background: rgba(255,255,255,.12); color: #d9e2ec; }
+.console-bar .right { margin-left: auto; display: flex; gap: 8px; }
+.ops .console-bar button { display: inline-flex; align-items: center; gap: 6px; background: transparent; color: #d9e2ec; border-color: rgba(255,255,255,.25); }
+.ops .console-bar button:hover:not(:disabled) { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.4); color: #fff; }
+.console-body { max-width: 1280px; margin: 0 auto; padding: clamp(16px, 2.4vw, 28px); }
+.ops .tab-count { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 10px; background: #eef2f6; color: #526579; font-size: 10px; font-weight: 700; }
+.ops .card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: -18px -20px 14px; padding: 13px 20px; border-bottom: 1px solid var(--ops-border); }
+.ops .card-head h2 { margin: 0; }
+.ops .card-head .meta { margin-left: auto; color: var(--ops-muted); font-size: 12px; display: flex; gap: 10px; align-items: center; }
+.ops .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+.ops tr.escalated td { background: #fff7f6; } .ops tr.escalated td:first-child { box-shadow: inset 3px 0 0 var(--ops-exception); }
+.ops button.danger { color: var(--ops-exception); border-color: #f1d0cd; }
+.ops button.danger.confirm { background: var(--ops-exception); border-color: var(--ops-exception); color: #fff; }
+.ops td button { min-height: 28px; padding: 4px 10px; font-size: 11.5px; }
+.ops td select { min-height: 30px; padding: 4px 8px; font-size: 12px; }
+.ops .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 720px) { .console-bar .tag, .console-bar .label { display: none; } .console-bar { padding: 0 12px; } .console-bar .title { font-size: 13.5px; } }
+`;
+
+const PLAN_PILL: Record<string, string> = { free: "pill-neutral", l1: "pill-blue", l2: "pill-blue", l3: "pill-blue" };
+const STATUS_PILL: Record<string, string> = { active: "pill-pass", canceled: "pill-exception", past_due: "pill-unknown" };
 
 function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => void }) {
   const [orgs, setOrgs] = useState<AdminOrg[]>([]);
@@ -384,270 +372,110 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
     o.plan.toLowerCase().includes(search.toLowerCase())
   );
 
-  const baseStyle: React.CSSProperties = {
-    background: "#070c17", color: "#e0e8f4",
-    fontFamily: "'Raleway', system-ui, sans-serif",
-    minHeight: "100dvh",
-  };
-
-  const tableHd: React.CSSProperties = {
-    textAlign: "left", padding: "10px 16px",
-    color: "#7a8fa8", fontSize: 10, fontWeight: 700,
-    textTransform: "uppercase", letterSpacing: "0.1em",
-    borderBottom: "1px solid rgba(255,255,255,0.05)", whiteSpace: "nowrap",
-  };
-
-  const tableTd: React.CSSProperties = {
-    padding: "11px 16px", fontSize: 12,
-    borderBottom: "1px solid rgba(255,255,255,0.03)", verticalAlign: "middle",
-  };
-
-  const mono: React.CSSProperties = { fontFamily: "monospace", fontSize: 11 };
-
-  const planBadge = (p: string) => ({
-    display: "inline-flex", alignItems: "center",
-    background: `${planColor(p)}15`, color: planColor(p),
-    borderRadius: 4, padding: "2px 8px", fontSize: 10,
-    fontWeight: 700, textTransform: "uppercase" as const,
-    border: `1px solid ${planColor(p)}30`, letterSpacing: "0.06em",
-  });
+  const tabs: [typeof tab, string, number, React.ReactNode][] = [
+    ["orgs", "Organizations", orgs.length, <Users size={13} aria-hidden="true" />],
+    ["activity", "Recent activity", activity.length, <Activity size={13} aria-hidden="true" />],
+    ["voice", "Voice sessions", voiceSessions.length, <PhoneCall size={13} aria-hidden="true" />],
+  ];
 
   return (
-    <div style={baseStyle}>
-      {/* Header */}
-      <header style={{
-        background: "rgba(7,12,23,0.95)", backdropFilter: "blur(12px)",
-        borderBottom: "1px solid rgba(0,194,168,0.12)",
-        padding: "0 24px", height: 56, display: "flex",
-        alignItems: "center", justifyContent: "space-between",
-        position: "sticky", top: 0, zIndex: 20,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <NHIDMark size={28} />
-          <span style={{ fontWeight: 800, fontSize: 14, color: "#e0e8f4" }}>Operations Console</span>
-          <span
-            style={{
-              fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 12,
-              background: "rgba(239,68,68,0.1)", color: "#f87171",
-              border: "1px solid rgba(239,68,68,0.25)", textTransform: "uppercase",
-              letterSpacing: "0.1em", marginLeft: 4,
-            }}
-          >
-            Internal
-          </span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button
-            onClick={load}
-            disabled={loading}
-            style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "7px 13px",
-              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 7, color: "#94a3b8", fontSize: 12, fontWeight: 600,
-              cursor: loading ? "not-allowed" : "pointer", fontFamily: "'Raleway', sans-serif",
-            }}
-          >
-            <RefreshCw
-              size={12}
-              style={{ animation: loading ? "spin 1s linear infinite" : "none" }}
-            />
-            Refresh
+    <div className="ops" style={{ padding: 0, minHeight: "100dvh" }}>
+      <style>{OPS_CSS}{CONSOLE_CSS}</style>
+      <header className="console-bar">
+        <span className="mark" aria-hidden="true">N</span>
+        <span className="title">Operations console</span>
+        <span className="tag">Internal</span>
+        <div className="right">
+          <button type="button" onClick={load} disabled={loading} aria-label="Refresh">
+            <RefreshCw size={12} className={loading ? "spin" : undefined} aria-hidden="true" /> <span className="label">Refresh</span>
           </button>
-          <button
-            onClick={onLogout}
-            style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "7px 13px",
-              background: "rgba(248,81,73,0.08)", border: "1px solid rgba(248,81,73,0.2)",
-              borderRadius: 7, color: "#f85149", fontSize: 12, fontWeight: 600,
-              cursor: "pointer", fontFamily: "'Raleway', sans-serif",
-            }}
-          >
-            <LogOut size={12} /> Sign Out
-          </button>
+          <button type="button" onClick={onLogout} aria-label="Sign out"><LogOut size={12} aria-hidden="true" /> <span className="label">Sign out</span></button>
         </div>
       </header>
 
-      <div style={{ maxWidth: 1280, margin: "0 auto", padding: "28px 24px" }}>
-        {error && (
-          <div style={{
-            display: "flex", alignItems: "center", gap: 8, marginBottom: 22,
-            background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.25)",
-            borderRadius: 10, padding: "12px 16px", color: "#f87171", fontSize: 13,
-          }}>
-            <AlertCircle size={14} /> {error}
+      <div className="console-body">
+        <div className="page-head">
+          <div className="page-head-copy">
+            <div className="eyebrow">NHID Clinical / Platform administration</div>
+            <h1>Organizations and activity</h1>
+            <div className="sub">Every organization on the platform, its plan and usage, recent API activity, and live voice sessions awaiting purge.</div>
           </div>
-        )}
-
-        {/* Stats */}
-        {stats && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 28 }}>
-            <StatCard label="Total Organisations" value={stats.total_orgs} />
-            <StatCard label="Total API Requests" value={stats.total_requests.toLocaleString()} />
-            <div style={{
-              background: "rgba(255,255,255,0.03)", border: "1px solid rgba(0,194,168,0.12)",
-              borderRadius: 12, padding: "18px 20px",
-            }}>
-              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#7a8fa8", marginBottom: 10 }}>
-                Plan Distribution
-              </div>
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                {Object.entries(stats.orgs_by_plan).map(([plan, count]) => (
-                  <div key={plan}>
-                    <span style={{ fontSize: 10, color: "#7a8fa8" }}>{plan.toUpperCase()} </span>
-                    <span style={{ fontSize: 18, fontWeight: 800, color: planColor(plan) }}>{count}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tabs */}
-        <div style={{ display: "flex", gap: 0, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 22 }}>
-          {([
-            ["orgs", "Organisations", orgs.length, <Users size={13} />],
-            ["activity", "Recent Activity", activity.length, <Activity size={13} />],
-            ["voice", "Voice Sessions", voiceSessions.length, <PhoneCall size={13} />],
-          ] as [string, string, number, React.ReactNode][]).map(([id, label, count, icon]) => (
-            <button
-              key={id}
-              onClick={() => setTab(id as "orgs" | "activity" | "voice")}
-              style={{
-                display: "flex", alignItems: "center", gap: 7,
-                padding: "10px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer",
-                background: "none", border: "none",
-                color: tab === id ? "#00c2a8" : "#7a8fa8",
-                borderBottom: tab === id ? "2px solid #00c2a8" : "2px solid transparent",
-                marginBottom: -1, fontFamily: "'Raleway', sans-serif",
-                transition: "color 0.15s",
-              }}
-            >
-              {icon}
-              {label}
-              {id === "voice" && voiceEscalatedCount > 0 && (
-                <span style={{
-                  fontSize: 10, padding: "1px 6px", borderRadius: 10, fontWeight: 700,
-                  background: "rgba(239,68,68,0.15)", color: "#f87171",
-                  border: "1px solid rgba(239,68,68,0.25)",
-                }}>
-                  {voiceEscalatedCount} escalated
-                </span>
-              )}
-              <span
-                style={{
-                  fontSize: 10, padding: "1px 6px", borderRadius: 10, fontWeight: 700,
-                  background: tab === id ? "rgba(0,194,168,0.15)" : "rgba(255,255,255,0.04)",
-                  color: tab === id ? "#00c2a8" : "#7a8fa8",
-                }}
-              >
-                {count}
-              </span>
-            </button>
-          ))}
         </div>
 
-        {/* Org search */}
-        {tab === "orgs" && (
-          <div style={{ marginBottom: 14 }}>
-            <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search organisations by name, ID, or plan…"
-              style={{
-                width: "100%", maxWidth: 360, padding: "9px 14px", borderRadius: 8,
-                background: "rgba(255,255,255,0.04)", border: "1px solid rgba(0,194,168,0.12)",
-                color: "#e0e8f4", fontSize: 13, outline: "none",
-                fontFamily: "'Raleway', sans-serif",
-              }}
-              onFocus={e => e.target.style.borderColor = "rgba(0,194,168,0.35)"}
-              onBlur={e => e.target.style.borderColor = "rgba(0,194,168,0.12)"}
-            />
+        {error && (
+          <div className="notice" role="alert" style={{ display: "flex", gap: 8, alignItems: "flex-start",
+               background: "var(--ops-exception-soft)", borderColor: "#f1d0cd", borderLeftColor: "var(--ops-exception)", color: "var(--ops-exception)" }}>
+            <AlertCircle size={14} style={{ marginTop: 2, flexShrink: 0 }} aria-hidden="true" /> <span>{error}</span>
           </div>
         )}
 
-        {/* Orgs Table */}
+        {stats && (
+          <div className="grid" style={{ marginBottom: 18 }}>
+            <Metric label="Organizations" value={stats.total_orgs} />
+            <Metric label="API requests, all time" value={stats.total_requests.toLocaleString()} />
+            <Metric label="Organizations by plan"
+              value={<span style={{ fontSize: 15, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {Object.entries(stats.orgs_by_plan).map(([plan, count]) => (
+                  <span key={plan}><span className="muted" style={{ fontSize: 11, fontWeight: 650 }}>{plan.toUpperCase()}</span> {count}</span>
+                ))}
+              </span>}
+              denominator={`of ${stats.total_orgs}`} />
+            <Metric label="Voice sessions needing handoff" value={voiceEscalatedCount}
+              denominator={`of ${voiceSessions.length} live sessions`} />
+          </div>
+        )}
+
+        <nav className="nav" aria-label="Console sections">
+          {tabs.map(([id, label, count, icon]) => (
+            <a key={id} href={`#${id}`} className={tab === id ? "active" : ""} aria-current={tab === id ? "page" : undefined}
+               onClick={(e) => { e.preventDefault(); setTab(id); }} style={{ gap: 6 }}>
+              {icon}{label}<span className="tab-count">{count}</span>
+            </a>
+          ))}
+        </nav>
+
         {tab === "orgs" && (
-          <div style={{
-            background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,194,168,0.1)",
-            borderRadius: 12, overflow: "hidden",
-          }}>
-            <div style={{
-              padding: "14px 20px", borderBottom: "1px solid rgba(255,255,255,0.05)",
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-            }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, color: "#e0e8f4" }}>
-                <Users size={15} style={{ color: "#00c2a8" }} /> All Organisations
-              </span>
-              <span style={{ color: "#7a8fa8", fontSize: 12 }}>
-                {filteredOrgs.length}{filteredOrgs.length !== orgs.length ? ` of ${orgs.length}` : ""} total
-              </span>
+          <div className="card">
+            <div className="card-head">
+              <h2>All organizations</h2>
+              <div className="meta">
+                <input value={search} onChange={e => setSearch(e.target.value)} aria-label="Search organizations"
+                       placeholder="Search by name, ID or plan" style={{ width: 240 }} />
+                <span>{filteredOrgs.length}{filteredOrgs.length !== orgs.length ? ` of ${orgs.length}` : ""}</span>
+              </div>
             </div>
             {loading ? (
-              <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>Loading…</div>
+              <div className="empty">Loading…</div>
             ) : filteredOrgs.length === 0 ? (
-              <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>
-                {search ? "No organisations match your search." : "No organisations yet."}
-              </div>
+              <div className="empty">{search ? "No organizations match your search." : "No organizations yet. They appear here as soon as someone creates a workspace."}</div>
             ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <div className="table-wrap">
+                <table>
                   <thead>
-                    <tr style={{ background: "rgba(0,0,0,0.15)" }}>
-                      <th style={tableHd}>Organisation</th>
-                      <th style={tableHd}>Plan</th>
-                      <th style={tableHd}>Status</th>
-                      <th style={tableHd}>Total Reqs</th>
-                      <th style={tableHd}>Today</th>
-                      <th style={tableHd}>Session Retention</th>
-                      <th style={tableHd}>API Key</th>
-                      <th style={tableHd}>Stripe Sub</th>
-                      <th style={tableHd}>Created</th>
+                    <tr>
+                      <th>Organization</th><th>Plan</th><th>Status</th><th>Total requests</th><th>Today</th>
+                      <th>Session retention</th><th>API key</th><th>Stripe subscription</th><th>Created</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredOrgs.map((org) => (
-                      <tr key={org.org_id} style={{ transition: "background 0.1s" }} className="hover:bg-white/[0.02]">
-                        <td style={tableTd}>
-                          <div style={{ fontWeight: 700, color: "#e0e8f4", marginBottom: 2 }}>{org.org_name}</div>
-                          <div style={{ ...mono, color: "#7a8fa8" }}>{org.org_id.slice(0, 8)}…</div>
+                      <tr key={org.org_id}>
+                        <td>
+                          <div style={{ fontWeight: 650 }}>{org.org_name}</div>
+                          <div className="mono muted">{org.org_id.slice(0, 8)}…</div>
                         </td>
-                        <td style={tableTd}>
-                          <span style={planBadge(org.plan)}>{org.plan}</span>
-                        </td>
-                        <td style={tableTd}>
-                          <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                            <span style={{
-                              width: 6, height: 6, borderRadius: "50%",
-                              background: statusColor(org.status), flexShrink: 0,
-                              boxShadow: `0 0 6px ${statusColor(org.status)}80`,
-                            }} />
-                            <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(org.status) }}>
-                              {org.status}
-                            </span>
-                          </span>
-                        </td>
-                        <td style={{ ...tableTd, fontWeight: 700, color: "#e0e8f4" }}>
-                          {org.total_requests.toLocaleString()}
-                        </td>
-                        <td style={{ ...tableTd, color: "#e0e8f4" }}>{org.today_requests}</td>
-                        <td style={tableTd}>
+                        <td><span className={`pill ${PLAN_PILL[org.plan] ?? "pill-neutral"}`}>{org.plan.toUpperCase()}</span></td>
+                        <td><span className={`pill ${STATUS_PILL[org.status] ?? "pill-neutral"}`}>{org.status.replace("_", " ")}</span></td>
+                        <td style={{ fontWeight: 650 }}>{org.total_requests.toLocaleString()}</td>
+                        <td>{org.today_requests}</td>
+                        <td>
                           <select
                             value={org.voice_session_ttl_hours ?? ""}
                             disabled={!!retentionLoading[org.org_id]}
+                            aria-label={`Voice session retention for ${org.org_name}`}
                             onChange={e => {
                               const val = e.target.value;
                               handleSetRetention(org.org_id, val === "" ? null : Number(val));
-                            }}
-                            style={{
-                              padding: "4px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-                              background: retentionLoading[org.org_id]
-                                ? "rgba(255,255,255,0.02)"
-                                : "rgba(0,194,168,0.07)",
-                              border: "1px solid rgba(0,194,168,0.25)",
-                              color: retentionLoading[org.org_id] ? "#4b5563" : "#00c2a8",
-                              cursor: retentionLoading[org.org_id] ? "default" : "pointer",
-                              fontFamily: "'Raleway', sans-serif",
-                              outline: "none",
                             }}
                           >
                             <option value="">Default (24h)</option>
@@ -662,21 +490,9 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                             stores a SHA-256 and this short non-secret fragment, and
                             drops the plaintext at creation. A toggle here would imply
                             the server holds a key it deliberately does not. */}
-                        <td style={tableTd}>
-                          <code style={{
-                            ...mono, color: "#00c2a8",
-                            background: "rgba(0,194,168,0.08)", borderRadius: 4, padding: "2px 7px",
-                            border: "1px solid rgba(0,194,168,0.15)",
-                          }}>
-                            {org.api_key_prefix ? `${org.api_key_prefix}…` : "—"}
-                          </code>
-                        </td>
-                        <td style={{ ...tableTd, ...mono, color: org.stripe_subscription_id ? "#3fb950" : "#7a8fa8" }}>
-                          {org.stripe_subscription_id ? org.stripe_subscription_id.slice(0, 14) + "…" : "—"}
-                        </td>
-                        <td style={{ ...tableTd, color: "#7a8fa8", fontSize: 11 }}>
-                          {fmt(org.created_at).split(",")[0]}
-                        </td>
+                        <td><code className="mono">{org.api_key_prefix ? `${org.api_key_prefix}…` : "—"}</code></td>
+                        <td className="mono muted">{org.stripe_subscription_id ? org.stripe_subscription_id.slice(0, 14) + "…" : "—"}</td>
+                        <td className="muted" style={{ whiteSpace: "nowrap" }}>{fmt(org.created_at).split(",")[0]}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -686,196 +502,70 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
           </div>
         )}
 
-        {/* Voice Sessions filters */}
-        {tab === "voice" && (
-          <div style={{ marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-            <input
-              value={voiceOrgFilter}
-              onChange={e => setVoiceOrgFilter(e.target.value)}
-              placeholder="Filter by org ID…"
-              style={{
-                padding: "8px 13px", borderRadius: 8, flex: "0 0 auto", minWidth: 200,
-                background: "rgba(255,255,255,0.04)", border: "1px solid rgba(0,194,168,0.12)",
-                color: "#e0e8f4", fontSize: 12, outline: "none", fontFamily: "'Raleway', sans-serif",
-              }}
-              onFocus={e => e.target.style.borderColor = "rgba(0,194,168,0.35)"}
-              onBlur={e => e.target.style.borderColor = "rgba(0,194,168,0.12)"}
-            />
-            {(["all", "escalated", "undisclosed"] as const).map(f => {
-              const labels = { all: "All", escalated: "⚠ Escalated only", undisclosed: "○ Not yet disclosed" };
-              const active = voiceStatusFilter === f;
-              return (
-                <button key={f} onClick={() => setVoiceStatusFilter(f)} style={{
-                  padding: "7px 13px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
-                  border: active ? "1px solid rgba(0,194,168,0.4)" : "1px solid rgba(255,255,255,0.08)",
-                  background: active ? "rgba(0,194,168,0.12)" : "rgba(255,255,255,0.03)",
-                  color: active ? "#00c2a8" : "#7a8fa8", transition: "all 0.15s",
-                }}>
-                  {labels[f]}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Voice Sessions Table */}
         {tab === "voice" && (() => {
           const filtered = voiceOrgFilter.trim()
             ? voiceSessions.filter(s => s.org_id.toLowerCase().includes(voiceOrgFilter.trim().toLowerCase()))
             : voiceSessions;
+          const labels = { all: "All", escalated: "Escalated only", undisclosed: "Not yet disclosed" };
           return (
-            <div style={{
-              background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,194,168,0.1)",
-              borderRadius: 12, overflow: "hidden",
-            }}>
-              <div style={{
-                padding: "14px 20px", borderBottom: "1px solid rgba(255,255,255,0.05)",
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-              }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, color: "#e0e8f4" }}>
-                  <PhoneCall size={15} style={{ color: "#00c2a8" }} /> Session Expiry Monitor
-                </span>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  {voiceEscalatedCount > 0 && (
-                    <span style={{
-                      fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 8,
-                      background: "rgba(239,68,68,0.1)", color: "#f87171",
-                      border: "1px solid rgba(239,68,68,0.25)",
-                    }}>
-                      {voiceEscalatedCount} need handoff
-                    </span>
-                  )}
-                  <span style={{ color: "#7a8fa8", fontSize: 12 }}>
-                    {filtered.length}{filtered.length !== voiceSessions.length ? ` of ${voiceSessions.length}` : ""} sessions
-                  </span>
+            <div className="card">
+              <div className="card-head">
+                <h2>Session expiry monitor</h2>
+                <div className="meta">
+                  {voiceEscalatedCount > 0 && <span className="pill pill-exception">{voiceEscalatedCount} need handoff</span>}
+                  <span>{filtered.length}{filtered.length !== voiceSessions.length ? ` of ${voiceSessions.length}` : ""} sessions</span>
                 </div>
               </div>
+              <div className="toolbar">
+                <input value={voiceOrgFilter} onChange={e => setVoiceOrgFilter(e.target.value)}
+                       placeholder="Filter by organization ID" aria-label="Filter by organization ID" style={{ minWidth: 220 }} />
+                {(["all", "escalated", "undisclosed"] as const).map(f => (
+                  <button key={f} type="button" onClick={() => setVoiceStatusFilter(f)} aria-pressed={voiceStatusFilter === f}
+                          className={voiceStatusFilter === f ? "primary" : undefined}>
+                    {labels[f]}
+                  </button>
+                ))}
+              </div>
               {loading ? (
-                <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>Loading…</div>
+                <div className="empty">Loading…</div>
               ) : filtered.length === 0 ? (
-                <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>
-                  {voiceOrgFilter || voiceStatusFilter !== "all" ? "No sessions match the active filters." : "No voice sessions recorded yet."}
-                </div>
+                <div className="empty">{voiceOrgFilter || voiceStatusFilter !== "all" ? "No sessions match the active filters." : "No voice sessions recorded yet."}</div>
               ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <div className="table-wrap">
+                  <table>
                     <thead>
-                      <tr style={{ background: "rgba(0,0,0,0.15)" }}>
-                        <th style={tableHd}>Session ID</th>
-                        <th style={tableHd}>Org</th>
-                        <th style={tableHd}>Provider</th>
-                        <th style={tableHd}>Disclosure</th>
-                        <th style={tableHd}>Escalated</th>
-                        <th style={tableHd}>Age</th>
-                        <th style={tableHd}>Expires In</th>
-                        <th style={tableHd}>Actions</th>
+                      <tr>
+                        <th>Session</th><th>Organization</th><th>Provider</th><th>Disclosure</th>
+                        <th>Escalated</th><th>Age</th><th>Purged in</th><th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filtered.map((s) => {
                         const actionState = voiceActionLoading[s.session_id];
-                        const isExpiringSoon = s.hours_until_purge < 6;
+                        const soon = s.hours_until_purge < 6;
                         return (
-                          <tr
-                            key={s.session_id}
-                            style={{
-                              transition: "background 0.1s",
-                              background: s.escalated ? "rgba(239,68,68,0.04)" : undefined,
-                              borderLeft: s.escalated ? "3px solid rgba(239,68,68,0.5)" : "3px solid transparent",
-                            }}
-                          >
-                            <td style={{ ...tableTd, ...mono, color: "#e0e8f4" }}>
-                              {s.session_id.slice(0, 8)}…{s.session_id.slice(-4)}
+                          <tr key={s.session_id} className={s.escalated ? "escalated" : undefined}>
+                            <td className="mono">{s.session_id.slice(0, 8)}…{s.session_id.slice(-4)}</td>
+                            <td className="mono muted">{s.org_id.slice(0, 12)}…</td>
+                            <td><span className="pill pill-neutral">{s.provider}</span></td>
+                            <td>{s.disclosure_confirmed
+                              ? <span className="pill pill-pass">Confirmed</span>
+                              : <span className="pill pill-unknown">Pending</span>}</td>
+                            <td>{s.escalated ? <span className="pill pill-exception">Escalated</span> : <span className="muted">—</span>}</td>
+                            <td className="muted" style={{ whiteSpace: "nowrap" }}>{fmtHours(s.age_hours)} ago</td>
+                            <td style={{ whiteSpace: "nowrap" }}>
+                              {soon ? <span className="pill pill-unknown">{fmtHours(s.hours_until_purge)}</span> : fmtHours(s.hours_until_purge)}
                             </td>
-                            <td style={{ ...tableTd, ...mono, color: "#7a8fa8", fontSize: 11 }}>
-                              {s.org_id.slice(0, 12)}…
-                            </td>
-                            <td style={tableTd}>
-                              <span style={{
-                                fontSize: 11, fontWeight: 600, padding: "2px 8px",
-                                borderRadius: 5, background: "rgba(83,216,251,0.08)",
-                                border: "1px solid rgba(83,216,251,0.15)", color: "#53d8fb",
-                              }}>
-                                {s.provider}
-                              </span>
-                            </td>
-                            <td style={tableTd}>
-                              <span style={{
-                                display: "inline-flex", alignItems: "center", gap: 5,
-                                fontSize: 11, fontWeight: 700,
-                                color: s.disclosure_confirmed ? "#3fb950" : "#fbbd24",
-                              }}>
-                                <span style={{
-                                  width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
-                                  background: s.disclosure_confirmed ? "#3fb950" : "#fbbd24",
-                                  boxShadow: `0 0 5px ${s.disclosure_confirmed ? "#3fb95080" : "#fbbd2480"}`,
-                                }} />
-                                {s.disclosure_confirmed ? "Confirmed" : "Pending"}
-                              </span>
-                            </td>
-                            <td style={tableTd}>
-                              {s.escalated ? (
-                                <span style={{
-                                  display: "inline-flex", alignItems: "center", gap: 5,
-                                  fontSize: 11, fontWeight: 800, color: "#f87171",
-                                  background: "rgba(239,68,68,0.1)", borderRadius: 6,
-                                  padding: "3px 8px", border: "1px solid rgba(239,68,68,0.3)",
-                                }}>
-                                  ⚠ Escalated
-                                </span>
-                              ) : (
-                                <span style={{ fontSize: 11, color: "#7a8fa8" }}>—</span>
-                              )}
-                            </td>
-                            <td style={{ ...tableTd, color: "#7a8fa8", fontSize: 11, whiteSpace: "nowrap" }}>
-                              {fmtHours(s.age_hours)} ago
-                            </td>
-                            <td style={{ ...tableTd, whiteSpace: "nowrap" }}>
-                              <span style={{
-                                fontSize: 11, fontWeight: 700,
-                                color: expiryColor(s.hours_until_purge),
-                                display: "inline-flex", alignItems: "center", gap: 4,
-                              }}>
-                                {isExpiringSoon && <span>⏳</span>}
-                                {fmtHours(s.hours_until_purge)}
-                              </span>
-                            </td>
-                            <td style={{ ...tableTd, whiteSpace: "nowrap" }}>
+                            <td style={{ whiteSpace: "nowrap" }}>
                               <div style={{ display: "flex", gap: 6 }}>
-                                <button
-                                  disabled={!!actionState}
-                                  onClick={() => handleExtend(s.session_id)}
-                                  title="Reset TTL to 24h from now"
-                                  style={{
-                                    padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,
-                                    border: "1px solid rgba(0,194,168,0.3)",
-                                    background: actionState === "extend" ? "rgba(0,194,168,0.2)" : "rgba(0,194,168,0.08)",
-                                    color: "#00c2a8", cursor: actionState ? "default" : "pointer",
-                                    opacity: actionState && actionState !== "extend" ? 0.4 : 1,
-                                    transition: "all 0.15s",
-                                  }}
-                                >
+                                <button type="button" disabled={!!actionState} onClick={() => handleExtend(s.session_id)}
+                                        title="Reset the purge timer to 24 hours from now">
                                   {actionState === "extend" ? "…" : "Extend"}
                                 </button>
-                                <button
-                                  disabled={actionState === "delete"}
-                                  onClick={() => handleForceDelete(s.session_id)}
-                                  title={actionState === "confirm-delete" ? "Click again to confirm deletion" : "Force-delete this session"}
-                                  style={{
-                                    padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,
-                                    border: actionState === "confirm-delete"
-                                      ? "1px solid rgba(239,68,68,0.6)"
-                                      : "1px solid rgba(239,68,68,0.2)",
-                                    background: actionState === "confirm-delete"
-                                      ? "rgba(239,68,68,0.2)"
-                                      : "rgba(239,68,68,0.06)",
-                                    color: "#f87171",
-                                    cursor: actionState === "delete" ? "default" : "pointer",
-                                    opacity: actionState === "delete" ? 0.5 : 1,
-                                    transition: "all 0.15s",
-                                  }}
-                                >
-                                  {actionState === "delete" ? "…" : actionState === "confirm-delete" ? "Confirm?" : "Delete"}
+                                <button type="button" disabled={actionState === "delete"} onClick={() => handleForceDelete(s.session_id)}
+                                        className={`danger${actionState === "confirm-delete" ? " confirm" : ""}`}
+                                        title={actionState === "confirm-delete" ? "Click again to confirm deletion" : "Force-delete this session"}>
+                                  {actionState === "delete" ? "…" : actionState === "confirm-delete" ? "Confirm delete" : "Delete"}
                                 </button>
                               </div>
                             </td>
@@ -890,65 +580,31 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
           );
         })()}
 
-        {/* Activity Table */}
         {tab === "activity" && (
-          <div style={{
-            background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,194,168,0.1)",
-            borderRadius: 12, overflow: "hidden",
-          }}>
-            <div style={{
-              padding: "14px 20px", borderBottom: "1px solid rgba(255,255,255,0.05)",
-              display: "flex", alignItems: "center", gap: 8,
-            }}>
-              <Activity size={15} style={{ color: "#00c2a8" }} />
-              <span style={{ fontWeight: 700, fontSize: 14, color: "#e0e8f4" }}>Recent Activity</span>
-              <span style={{ color: "#7a8fa8", fontSize: 12 }}>last 50 events</span>
+          <div className="card">
+            <div className="card-head">
+              <h2>Recent activity</h2>
+              <div className="meta"><span>last 50 events</span></div>
             </div>
             {loading ? (
-              <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>Loading…</div>
+              <div className="empty">Loading…</div>
             ) : activity.length === 0 ? (
-              <div style={{ padding: 40, textAlign: "center", color: "#7a8fa8" }}>No activity recorded yet.</div>
+              <div className="empty">No activity recorded yet.</div>
             ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <div className="table-wrap">
+                <table>
                   <thead>
-                    <tr style={{ background: "rgba(0,0,0,0.15)" }}>
-                      <th style={tableHd}>Time</th>
-                      <th style={tableHd}>Org</th>
-                      <th style={tableHd}>Method</th>
-                      <th style={tableHd}>Endpoint</th>
-                      <th style={tableHd}>Status</th>
-                      <th style={tableHd}>Session</th>
-                    </tr>
+                    <tr><th>Time</th><th>Organization</th><th>Method</th><th>Endpoint</th><th>Status</th><th>Session</th></tr>
                   </thead>
                   <tbody>
                     {activity.map((row) => (
-                      <tr key={row.id} className="hover:bg-white/[0.02]" style={{ transition: "background 0.1s" }}>
-                        <td style={{ ...tableTd, ...mono, color: "#7a8fa8", whiteSpace: "nowrap" }}>
-                          {fmt(row.timestamp)}
-                        </td>
-                        <td style={{ ...tableTd, ...mono, color: "#e0e8f4" }}>
-                          {row.org_id.slice(0, 8)}…
-                        </td>
-                        <td style={tableTd}>
-                          <span style={{
-                            fontSize: 10, fontWeight: 800, color: "#00c2a8",
-                            fontFamily: "monospace", letterSpacing: "0.06em",
-                            background: "rgba(0,194,168,0.08)", padding: "2px 6px", borderRadius: 4,
-                          }}>{row.method}</span>
-                        </td>
-                        <td style={{ ...tableTd, ...mono, color: "#e0e8f4" }}>{row.endpoint}</td>
-                        <td style={tableTd}>
-                          <span style={{
-                            ...mono, fontWeight: 800, fontSize: 12,
-                            color: (row.status_code ?? 0) < 400 ? "#3fb950" : "#f85149",
-                          }}>
-                            {row.status_code ?? "—"}
-                          </span>
-                        </td>
-                        <td style={{ ...tableTd, ...mono, color: "#7a8fa8", fontSize: 10 }}>
-                          {row.session_id ? row.session_id.slice(0, 16) + "…" : "—"}
-                        </td>
+                      <tr key={row.id}>
+                        <td className="mono muted" style={{ whiteSpace: "nowrap" }}>{fmt(row.timestamp)}</td>
+                        <td className="mono">{row.org_id.slice(0, 8)}…</td>
+                        <td><span className="pill pill-neutral mono">{row.method}</span></td>
+                        <td className="mono">{row.endpoint}</td>
+                        <td><span className={`pill ${(row.status_code ?? 0) < 400 ? "pill-pass" : "pill-exception"}`}>{row.status_code ?? "—"}</span></td>
+                        <td className="mono muted">{row.session_id ? row.session_id.slice(0, 16) + "…" : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -958,8 +614,6 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
           </div>
         )}
       </div>
-
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
@@ -1024,26 +678,12 @@ export default function AdminPage() {
 
   if (validating) {
     return (
-      <div
-        style={{
-          minHeight: "100dvh", display: "flex", alignItems: "center",
-          justifyContent: "center", background: "var(--nhid-bg)",
-          flexDirection: "column", gap: 16,
-        }}
-      >
-        <div
-          style={{
-            width: 32, height: 32, borderRadius: "50%",
-            border: "2px solid rgba(0,194,168,0.2)",
-            borderTopColor: "#00c2a8",
-            animation: "spin 0.8s linear infinite",
-          }}
-        />
-        <span style={{ fontSize: 12, color: "var(--nhid-muted)", fontFamily: "'Raleway', sans-serif" }}>
-          Verifying session…
-        </span>
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </div>
+      <EntryShell single>
+        <div className="card" style={{ padding: "28px 30px" }}>
+          <h2 style={{ marginBottom: 4 }}>Verifying session…</h2>
+          <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Checking your administrator session with the server.</p>
+        </div>
+      </EntryShell>
     );
   }
 
