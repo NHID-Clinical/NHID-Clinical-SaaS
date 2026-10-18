@@ -186,15 +186,27 @@ def analyze_interaction(interaction: Dict[str, Any]) -> Dict[str, Any]:
     agent_turns = [t for t in turns if t.get("speaker") == SPEAKER_AGENT]
     human_turns = [t for t in turns if t.get("speaker") == SPEAKER_HUMAN]
 
+    # A disclosure counts only if the caller could have heard it. When playback
+    # was cut off, the logged text may be the whole scripted line, so an
+    # interrupted turn is credited only on the part reported as played. With no
+    # such report it is not credited: the record cannot show the words were
+    # heard, and the agent must say it again.
     disclosure_turn_index: Optional[int] = None
     disclosure_offset_ms: Optional[int] = None
+    interrupted_disclosure_turns: List[int] = []
     for idx, turn in enumerate(turns):
         if turn.get("speaker") != SPEAKER_AGENT:
             continue
-        if _matches(_normalize_for_match(turn.get("text", "")), _DISCLOSURE_PATTERNS):
-            disclosure_turn_index = idx
-            disclosure_offset_ms = turn.get("offset_ms")
-            break
+        if not _matches(_normalize_for_match(turn.get("text", "")), _DISCLOSURE_PATTERNS):
+            continue
+        if turn.get("interrupted") and not _matches(
+            _normalize_for_match(turn.get("heard_text") or ""), _DISCLOSURE_PATTERNS
+        ):
+            interrupted_disclosure_turns.append(idx)
+            continue
+        disclosure_turn_index = idx
+        disclosure_offset_ms = turn.get("offset_ms")
+        break
 
     # PHI requested by the agent, and whether any of it preceded disclosure.
     phi_turn_indices = [
@@ -255,6 +267,7 @@ def analyze_interaction(interaction: Dict[str, Any]) -> Dict[str, Any]:
         "human_turn_count": len(human_turns),
         "disclosed": disclosure_turn_index is not None,
         "disclosure_turn_index": disclosure_turn_index,
+        "interrupted_disclosure_turns": interrupted_disclosure_turns,
         "impersonation_latency_turns": il_turns,
         "impersonation_latency_seconds": il_seconds,
         "phi_requested": bool(phi_turn_indices),
@@ -275,9 +288,16 @@ def evaluate_controls(interaction: Dict[str, Any], facts: Dict[str, Any]) -> Lis
     results: List[Dict[str, Any]] = []
     ai = interaction.get("ai_assessment", AI_UNKNOWN)
     has_agent_turns = facts["agent_turn_count"] > 0
+    cut_off = facts.get("interrupted_disclosure_turns") or []
+    cut_off_note = (
+        f" A disclosure at turn {cut_off[0]} was interrupted before it was "
+        "heard and is not counted." if cut_off else ""
+    )
 
     # ── IDG-01: did the non-human actor disclose? ────────────────────────────
-    if ai == AI_UNKNOWN and not facts["disclosed"]:
+    # An interrupted disclosure attempt is the agent identifying itself as
+    # automated, so it settles that IDG-01 applies even without vendor metadata.
+    if ai == AI_UNKNOWN and not facts["disclosed"] and not cut_off:
         # No disclosure and no vendor signal: we cannot tell whether this was an
         # AI at all, so the control does not apply rather than failing.
         results.append(_result(
@@ -303,9 +323,17 @@ def evaluate_controls(interaction: Dict[str, Any], facts: Dict[str, Any]) -> Lis
             results.append(_result(
                 "IDG-01", RESULT_EXCEPTION,
                 f"Disclosure occurred at turn {il} rather than the opening turn "
-                f"(Impersonation Latency = {il} turns).",
+                f"(Impersonation Latency = {il} turns).{cut_off_note}",
                 category=CAT_DISCLOSURE_DELAYED,
             ))
+    elif cut_off:
+        results.append(_result(
+            "IDG-01", RESULT_EXCEPTION,
+            f"The agent began a disclosure at turn {cut_off[0]} but playback was "
+            "interrupted before it was heard, and the disclosure was not "
+            "repeated.",
+            category=CAT_DISCLOSURE_MISSING,
+        ))
     else:
         results.append(_result(
             "IDG-01", RESULT_EXCEPTION,
@@ -323,7 +351,8 @@ def evaluate_controls(interaction: Dict[str, Any], facts: Dict[str, Any]) -> Lis
     elif facts["phi_before_disclosure"]:
         results.append(_result(
             "PDX-01", RESULT_EXCEPTION,
-            "The agent requested protected data before any disclosure was made.",
+            "The agent requested protected data before any disclosure was made."
+            + cut_off_note,
             category=CAT_PHI_BEFORE_DISCLOSURE,
         ))
     else:

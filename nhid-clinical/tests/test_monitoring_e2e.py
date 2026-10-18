@@ -237,6 +237,82 @@ def test_phi_before_disclosure_raises_a_finding(loaded):
                for f in detail["findings"])
 
 
+# ── Interrupted disclosure (barge-in) ─────────────────────────────────────────
+#
+# Platforms often log the full scripted line even when the caller cut playback
+# off. A disclosure counts only if the record shows it was heard.
+
+def _evaluate(turns, ai="non_human"):
+    canonical = normalization.normalize({
+        "external_id": "CALL-BARGE", "occurred_at": "2026-09-01T10:00:00Z",
+        "ai_assessment": ai, "turns": turns,
+    }, "generic")
+    facts = monitoring.analyze_interaction(canonical)
+    results = {r["control_id"]: r for r in monitoring.evaluate_controls(canonical, facts)}
+    return facts, results
+
+
+DISCLOSURE_LINE = "Hi, this is Ava, I'm an automated assistant calling from the clinic."
+
+
+def test_an_interrupted_disclosure_is_not_counted():
+    facts, results = _evaluate([
+        {**_turn("agent", DISCLOSURE_LINE, 0), "interrupted": True,
+         "heard_text": "Hi, this is Ava, I'm an"},
+        _turn("human", "Yes, hi, what's this about?", 2000),
+        _turn("agent", "Can I get your date of birth to verify?", 4000),
+    ])
+    assert not facts["disclosed"]
+    assert facts["interrupted_disclosure_turns"] == [0]
+    assert results["IDG-01"]["result"] == monitoring.RESULT_EXCEPTION
+    assert "interrupted" in results["IDG-01"]["explanation"]
+    assert results["PDX-01"]["result"] == monitoring.RESULT_EXCEPTION
+
+
+def test_an_interrupted_turn_with_no_heard_text_is_not_counted():
+    """Fail closed: nothing shows the words were played."""
+    facts, _ = _evaluate([
+        {**_turn("agent", DISCLOSURE_LINE, 0), "interrupted": True},
+        _turn("human", "Hello?", 1500),
+    ])
+    assert not facts["disclosed"]
+    assert facts["interrupted_disclosure_turns"] == [0]
+
+
+def test_an_interruption_after_the_disclosure_was_heard_still_counts():
+    facts, results = _evaluate([
+        {**_turn("agent", DISCLOSURE_LINE, 0), "interrupted": True,
+         "heard_text": "Hi, this is Ava, I'm an automated assistant"},
+        _turn("human", "Okay, go ahead.", 3000),
+    ])
+    assert facts["disclosed"] and facts["impersonation_latency_turns"] == 0
+    assert results["IDG-01"]["result"] == monitoring.RESULT_PASS
+
+
+def test_a_repeated_disclosure_after_an_interruption_counts_late():
+    facts, results = _evaluate([
+        {**_turn("agent", DISCLOSURE_LINE, 0), "interrupted": True,
+         "heard_text": "Hi, this is"},
+        _turn("human", "Sorry, who is this?", 1500),
+        _turn("agent", "I'm an automated assistant from the clinic.", 3000),
+        _turn("human", "Okay.", 5000),
+        _turn("agent", "Can I get your date of birth?", 6000),
+    ])
+    assert facts["impersonation_latency_turns"] == 2
+    assert results["IDG-01"]["result"] == monitoring.RESULT_EXCEPTION
+    assert "interrupted" in results["IDG-01"]["explanation"]
+    assert results["PDX-01"]["result"] == monitoring.RESULT_PASS
+
+
+def test_an_interrupted_disclosure_makes_idg01_assessable_without_vendor_metadata():
+    """The agent's own script says it is automated, so IDG-01 applies."""
+    _, results = _evaluate([
+        {**_turn("agent", DISCLOSURE_LINE, 0), "interrupted": True, "heard_text": "Hi"},
+        _turn("human", "Hello?", 1000),
+    ], ai="unknown")
+    assert results["IDG-01"]["result"] == monitoring.RESULT_EXCEPTION
+
+
 def test_completed_escalation_passes(loaded):
     detail = monitoring.get_interaction(loaded["org_id"], loaded["ids"]["escalation_completed"])
     assert _result_for(detail, "EIT-01") == monitoring.RESULT_PASS

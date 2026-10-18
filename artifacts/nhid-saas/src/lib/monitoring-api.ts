@@ -63,6 +63,10 @@ export interface Turn {
   speaker: "agent" | "human" | "unknown";
   text: string;
   offset_ms: number | null;
+  /** Playback was cut off by the other party (barge-in). */
+  interrupted?: boolean;
+  /** For an interrupted turn, the part actually played, when reported. */
+  heard_text?: string;
 }
 
 export interface Evaluation {
