@@ -74,12 +74,17 @@ services:
     # Built from the repository root with pnpm: the app depends on workspace
     # packages ("workspace:*") and the pnpm catalog ("catalog:"), which npm
     # cannot resolve -- `npm install` inside artifacts/nhid-saas fails.
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm -C artifacts/nhid-saas run build
+    # pnpm is fetched at a pinned version rather than via `corepack enable`,
+    # which needs write access to Node's install directory and, with no
+    # packageManager field, picks its own pnpm version. 10.x matches CI.
+    buildCommand: npx --yes pnpm@10.33.0 install --frozen-lockfile && npx --yes pnpm@10.33.0 -C artifacts/nhid-saas run build
     staticPublishPath: artifacts/nhid-saas/dist/public
     envVars:
       # Vite requires both at build time and fails the build without them.
       # BASE_PATH is "/" here because this is a site root, not a project subpath
       # the way GitHub Pages is.
+      - key: NODE_VERSION          # same major as CI
+        value: "22"
       - key: PORT
         value: "3000"
       - key: BASE_PATH
