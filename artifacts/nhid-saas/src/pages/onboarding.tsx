@@ -1,487 +1,232 @@
-import { useLocation } from "wouter";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
-import { zodResolver } from "@hookform/resolvers/zod";
+/**
+ * The front door: create a workspace, or sign in to one with its API key.
+ *
+ * Two kinds of credential exist and this page says which is which. An
+ * organization's API key is for machines and pipelines; people sign in with an
+ * emailed link (/signin), which is why creating a workspace asks for the
+ * owner's email -- without it the organization has no human who can ever sign
+ * in that way.
+ *
+ * On a build with no backend (the GitHub Pages demonstration) both forms are
+ * replaced by a plain statement and a route into the recorded demonstration,
+ * instead of forms that can only ever fail.
+ */
 import { useEffect, useState } from "react";
-import { Copy, Check, Eye, EyeOff } from "lucide-react";
+import { Link, useLocation } from "wouter";
+import { Copy, Check } from "lucide-react";
 
 import { useCreateOrg, useApiKey } from "@/hooks/use-nhid";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
-import { apiUrl } from "@/lib/config";
+import { API_CONNECTED, apiUrl } from "@/lib/config";
+import { EntryShell, NotConnected } from "@/components/entry-shell";
 
-const schema = z.object({
-  orgName: z.string().min(2, "Organization name must be at least 2 characters.").max(120),
-});
-type FormValues = z.infer<typeof schema>;
+type Tab = "create" | "key";
 
-const NHIDLogo = () => (
-  <div style={{ textAlign: "center", marginBottom: 36 }}>
-    <div
-      style={{
-        display: "inline-flex", alignItems: "center", justifyContent: "center",
-        width: 68, height: 68, borderRadius: 20,
-        background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
-        boxShadow: "0 0 50px rgba(0,194,168,0.5), 0 0 100px rgba(0,194,168,0.15)",
-        fontSize: 30, fontWeight: 900, color: "#070c17",
-        marginBottom: 18, fontFamily: "'Raleway', sans-serif",
-        letterSpacing: "-0.03em",
-      }}
-    >
-      N
-    </div>
-    <div style={{ fontSize: 24, fontWeight: 800, color: "var(--nhid-text)", letterSpacing: "-0.02em", marginBottom: 5 }}>
-      NHID Clinical
-    </div>
-    <div style={{ fontSize: 12, color: "var(--nhid-muted)", letterSpacing: "0.02em" }}>
-      Governance monitoring and evidence for healthcare voice AI
-    </div>
-  </div>
-);
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function ApiKeyReveal({ apiKey, orgName, onContinue }: { apiKey: string; orgName: string; onContinue: () => void }) {
+function Intro() {
+  return (
+    <>
+      <div className="eyebrow">Healthcare voice-AI governance</div>
+      <h1>Evidence for what your voice agents did on the call</h1>
+      <p className="lead">
+        Evaluate AI voice agents against the NHID-Clinical controls and keep a reproducible record
+        of every decision: which rule applied, what the agent attempted, and what was allowed,
+        escalated or denied.
+      </p>
+      <ul>
+        <li><span className="n">1</span><div><b>Identity and disclosure</b><span>Did the agent say it was automated, and before anything sensitive was exchanged?</span></div></li>
+        <li><span className="n">2</span><div><b>Authorization before data</b><span>Was the caller's authority established before protected information moved?</span></div></li>
+        <li><span className="n">3</span><div><b>Reproducible evidence</b><span>Scenario, control version, expected and observed outcome, reason code and trace for every finding.</span></div></li>
+      </ul>
+      <p className="muted" style={{ fontSize: 12, marginTop: 22, maxWidth: 520 }}>
+        Evaluation results are evidence, not certification. Passing these tests does not make a
+        deployment HIPAA-compliant.
+      </p>
+    </>
+  );
+}
+
+function KeyReveal({ apiKey, orgName, ownerInvited, onContinue }: {
+  apiKey: string; orgName: string; ownerInvited: boolean; onContinue: () => void;
+}) {
   const [copied, setCopied] = useState(false);
-  const [revealed, setRevealed] = useState(false);
-
   const copy = async () => {
     await navigator.clipboard.writeText(apiKey).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   };
-
   return (
-    <div style={{ animation: "fadeSlideUp 0.3s ease" }}>
-      <div style={{ textAlign: "center", marginBottom: 24 }}>
-        <div
-          style={{
-            fontSize: 40, marginBottom: 12, display: "inline-block",
-            background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
-            borderRadius: "50%", width: 64, height: 64,
-            lineHeight: "64px", textAlign: "center",
-            boxShadow: "0 0 30px rgba(0,194,168,0.4)",
-            color: "#070c17", fontWeight: 900,
-          }}
-        >
-          ✓
-        </div>
-        <div style={{ fontSize: 18, fontWeight: 800, color: "var(--nhid-teal)", marginBottom: 5 }}>
-          Workspace Created
-        </div>
-        <div style={{ fontSize: 12, color: "var(--nhid-muted)" }}>
-          <strong style={{ color: "var(--nhid-text)", fontWeight: 700 }}>{orgName}</strong> is now on NHID Clinical
-        </div>
+    <div className="body">
+      <span className="pill pill-pass">Workspace created</span>
+      <h2 style={{ marginTop: 12 }}>{orgName}</h2>
+      <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+        This is the organization&apos;s API key. It is shown once and cannot be recovered; only
+        its fingerprint is stored.
+      </p>
+      <div className="keybox">
+        <code data-testid="api-key">{apiKey}</code>
+        <button type="button" onClick={copy} aria-label="Copy API key">
+          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copied" : "Copy"}
+        </button>
       </div>
-
-      <div
-        style={{
-          background: "rgba(0,0,0,0.3)", border: "1px solid var(--nhid-border)",
-          borderRadius: 10, padding: "16px", marginBottom: 14,
-        }}
-      >
-        <div
-          style={{
-            fontSize: 10, fontWeight: 700, color: "var(--nhid-muted)",
-            textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10,
-          }}
-        >
-          Your API Key
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <code
-            style={{
-              flex: 1, fontSize: 11, color: "var(--nhid-cyan)", fontFamily: "monospace",
-              wordBreak: "break-all", lineHeight: 1.5,
-              filter: revealed ? "none" : "blur(5px)",
-              transition: "filter 0.2s",
-              userSelect: revealed ? "text" : "none",
-            }}
-          >
-            {apiKey}
-          </code>
-          <button
-            onClick={() => setRevealed(r => !r)}
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              color: "var(--nhid-muted)", padding: 4, flexShrink: 0,
-            }}
-          >
-            {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
-          <button
-            onClick={copy}
-            style={{
-              padding: "6px 12px", borderRadius: 6, flexShrink: 0,
-              background: copied ? "rgba(0,194,168,0.2)" : "rgba(255,255,255,0.06)",
-              border: "1px solid var(--nhid-border)",
-              color: copied ? "var(--nhid-teal)" : "var(--nhid-muted)",
-              fontSize: 11, cursor: "pointer",
-              fontFamily: "'Raleway', sans-serif",
-              display: "flex", alignItems: "center", gap: 4,
-              transition: "all 0.15s",
-            }}
-          >
-            {copied ? <Check size={11} /> : <Copy size={11} />}
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
+      <div className="notice" style={{ marginTop: 14 }}>
+        Store it in your secrets manager now. Rotate it from Settings if it is ever exposed.
       </div>
-
-      <div
-        style={{
-          fontSize: 11, color: "#fbbd24", padding: "10px 12px",
-          background: "rgba(251,189,36,0.06)", border: "1px solid rgba(251,189,36,0.2)",
-          borderRadius: 8, marginBottom: 22, lineHeight: 1.6,
-        }}
-      >
-        ⚠ Save your API key now — it will not be shown again.
-      </div>
-
-      <button
-        onClick={onContinue}
-        style={{
-          width: "100%", padding: "13px", borderRadius: 10,
-          background: "linear-gradient(135deg, #00c2a8, #53d8fb)",
-          border: "none", color: "#070c17", fontSize: 14, fontWeight: 800,
-          cursor: "pointer", fontFamily: "'Raleway', sans-serif",
-          boxShadow: "0 0 30px rgba(0,194,168,0.35)",
-          letterSpacing: "0.01em",
-        }}
-      >
-        Enter Dashboard →
-      </button>
-
-      <style>{`@keyframes fadeSlideUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }`}</style>
+      {ownerInvited && (
+        <p className="muted" style={{ fontSize: 12.5 }}>
+          A sign-in link is on its way to the owner&apos;s email, for signing in as a person.
+        </p>
+      )}
+      <button type="button" className="primary block" onClick={onContinue}>Continue to dashboard</button>
     </div>
   );
 }
 
-function SignInPanel({ onSuccess }: { onSuccess: () => void }) {
+function CreateForm({ onCreated }: { onCreated: (key: string, org: string, invited: boolean) => void }) {
+  const createOrg = useCreateOrg();
+  const { toast } = useToast();
+  const [orgName, setOrgName] = useState("");
+  const [email, setEmail] = useState("");
+  const [touched, setTouched] = useState(false);
+
+  const nameErr = orgName.trim().length < 2 ? "Enter at least 2 characters." : orgName.length > 120 ? "Keep it under 120 characters." : "";
+  const emailErr = !EMAIL_RE.test(email.trim()) ? "Enter the owner's work email." : "";
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setTouched(true);
+    if (nameErr || emailErr) return;
+    createOrg.mutate({ orgName: orgName.trim(), ownerEmail: email.trim() }, {
+      onSuccess: (res) => onCreated(res.api_key, res.org_name, !!res.owner_invited),
+      onError: (err) => toast({
+        title: "Could not create workspace",
+        description: err instanceof Error && err.message ? err.message : "The service did not respond. Try again in a moment.",
+        variant: "destructive",
+      }),
+    });
+  };
+
+  return (
+    <form className="body" onSubmit={submit} noValidate>
+      <h2>Create a workspace</h2>
+      <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Free to start. Change plan any time from Billing.</p>
+      <div className="field">
+        <label htmlFor="org-name">Organization name</label>
+        <input id="org-name" data-testid="input-orgname" value={orgName} onChange={(e) => setOrgName(e.target.value)}
+               placeholder="e.g. Lakeside Health Plan" autoComplete="organization" aria-invalid={touched && !!nameErr} />
+        {touched && nameErr && <div className="err">{nameErr}</div>}
+      </div>
+      <div className="field">
+        <label htmlFor="owner-email">Owner email</label>
+        <input id="owner-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+               placeholder="you@organization.example" autoComplete="email" aria-invalid={touched && !!emailErr} />
+        {touched && emailErr
+          ? <div className="err">{emailErr}</div>
+          : <div className="hint">The owner signs in with an emailed link and can invite colleagues.</div>}
+      </div>
+      <div className="plan">
+        <div className="row"><span>Free plan</span><span>$0 / month</span></div>
+        <div className="muted">100 audit events a day · tamper-evident trail · chain verification</div>
+      </div>
+      <button type="submit" className="primary block" data-testid="button-submit" disabled={createOrg.isPending}>
+        {createOrg.isPending ? "Creating workspace…" : "Create workspace"}
+      </button>
+    </form>
+  );
+}
+
+function KeySignIn({ onSuccess }: { onSuccess: () => void }) {
+  const { toast } = useToast();
   const [key, setKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const { toast } = useToast();
 
-  const handleSignIn = async () => {
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
     const trimmed = key.trim();
     if (!trimmed) return;
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(apiUrl("/saas/orgs/me"), {
-        headers: { "X-API-Key": trimmed },
-      });
+      const res = await fetch(apiUrl("/saas/orgs/me"), { headers: { "X-API-Key": trimmed } });
       if (!res.ok) {
-        setError("API key not recognised. Please check and try again.");
-        setLoading(false);
+        setError(res.status === 401 || res.status === 403
+          ? "That key was not recognised, or its organization is inactive."
+          : `The service returned an error (${res.status}). Try again in a moment.`);
         return;
       }
       const data = await res.json();
       localStorage.setItem("nhid_api_key", trimmed);
-      localStorage.setItem("nhid_org", JSON.stringify({
-        org_id: data.org_id,
-        org_name: data.org_name,
-        plan: data.plan,
-      }));
+      localStorage.setItem("nhid_org", JSON.stringify({ org_id: data.org_id, org_name: data.org_name, plan: data.plan }));
       window.dispatchEvent(new Event("storage"));
-      toast({ title: "Signed in", description: `Welcome back, ${data.org_name}` });
+      toast({ title: "Signed in", description: data.org_name });
       onSuccess();
     } catch {
-      setError("Could not connect. Please try again.");
+      setError("Could not reach the service. Check your connection and try again.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div
-      style={{
-        background: "rgba(255,255,255,0.02)",
-        border: "1px solid var(--nhid-border)",
-        borderRadius: 14, padding: "22px 26px",
-        backdropFilter: "blur(12px)",
-        animation: "fadeSlideUp 0.25s ease",
-      }}
-    >
-      <div style={{ fontSize: 14, fontWeight: 700, color: "var(--nhid-text)", marginBottom: 4 }}>
-        Sign in with your API key
+    <form className="body" onSubmit={submit}>
+      <h2>Sign in with an API key</h2>
+      <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+        For integrations and administrators holding the organization&apos;s key.
+      </p>
+      <div className="field">
+        <label htmlFor="api-key">API key</label>
+        <input id="api-key" className="mono" value={key} onChange={(e) => { setKey(e.target.value); setError(""); }}
+               placeholder="nhid_…" autoComplete="off" spellCheck={false} aria-invalid={!!error} />
+        {error && <div className="err" role="alert">{error}</div>}
       </div>
-      <div style={{ fontSize: 11, color: "var(--nhid-muted)", marginBottom: 16, lineHeight: 1.6 }}>
-        Paste the key you received when you created your workspace.
-      </div>
-
-      <input
-        value={key}
-        onChange={e => { setKey(e.target.value); setError(""); }}
-        onKeyDown={e => e.key === "Enter" && handleSignIn()}
-        placeholder="nhid_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-        autoFocus
-        style={{
-          width: "100%", padding: "11px 14px", borderRadius: 9,
-          background: "rgba(255,255,255,0.05)",
-          border: `1px solid ${error ? "rgba(239,68,68,0.5)" : "var(--nhid-border)"}`,
-          color: "var(--nhid-text)", fontSize: 12, outline: "none",
-          fontFamily: "monospace", marginBottom: error ? 8 : 14,
-          transition: "border-color 0.2s",
-        }}
-        onFocus={e => !error && (e.target.style.borderColor = "rgba(0,194,168,0.4)")}
-        onBlur={e => !error && (e.target.style.borderColor = "var(--nhid-border)")}
-      />
-
-      {error && (
-        <div style={{ fontSize: 11, color: "#f87171", marginBottom: 14 }}>{error}</div>
-      )}
-
-      <button
-        onClick={handleSignIn}
-        disabled={loading || !key.trim()}
-        style={{
-          width: "100%", padding: "11px", borderRadius: 9,
-          background: key.trim() ? "linear-gradient(135deg, #00c2a8, #53d8fb)" : "rgba(255,255,255,0.06)",
-          border: "none",
-          color: key.trim() ? "#070c17" : "var(--nhid-muted)",
-          fontSize: 13, fontWeight: 800, cursor: loading || !key.trim() ? "not-allowed" : "pointer",
-          fontFamily: "'Raleway', sans-serif",
-          boxShadow: key.trim() ? "0 0 24px rgba(0,194,168,0.3)" : "none",
-          transition: "all 0.2s", opacity: loading ? 0.75 : 1,
-        }}
-      >
-        {loading ? "Verifying…" : "Sign In →"}
+      <button type="submit" className="primary block" disabled={loading || !key.trim()}>
+        {loading ? "Verifying…" : "Sign in"}
       </button>
-      <style>{`@keyframes fadeSlideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }`}</style>
-    </div>
+    </form>
   );
 }
 
 export default function Onboarding() {
   const [, setLocation] = useLocation();
   const apiKey = useApiKey();
-  const createOrg = useCreateOrg();
-  const { toast } = useToast();
-  const [createdKey, setCreatedKey] = useState<string | null>(null);
-  const [createdOrg, setCreatedOrg] = useState<string>("");
-  const [showSignIn, setShowSignIn] = useState(false);
+  const [tab, setTab] = useState<Tab>("create");
+  const [created, setCreated] = useState<{ key: string; org: string; invited: boolean } | null>(null);
 
-  // Redirect if already signed in
   useEffect(() => {
-    if (apiKey && !createdKey) setLocation("/dashboard");
-  }, [apiKey, createdKey, setLocation]);
-
-  const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { orgName: "" },
-  });
-
-  const onSubmit = (data: FormValues) => {
-    createOrg.mutate({ orgName: data.orgName }, {
-      onSuccess: (res) => {
-        setCreatedOrg(data.orgName);
-        setCreatedKey(res.api_key);
-        toast({ title: "Workspace created", description: "Your API key is ready." });
-      },
-      onError: () => {
-        toast({
-          title: "Could not create workspace",
-          description: "Please try again in a moment.",
-          variant: "destructive",
-        });
-      },
-    });
-  };
-
-  const watchOrgName = form.watch("orgName");
+    if (apiKey && !created) setLocation("/dashboard");
+  }, [apiKey, created, setLocation]);
 
   return (
-    <div
-      style={{
-        minHeight: "100dvh", background: "var(--nhid-bg)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        position: "relative", overflow: "hidden", padding: "20px",
-      }}
-    >
-      {/* Ambient glows */}
-      <div
-        style={{
-          position: "absolute", top: -200, left: "50%", transform: "translateX(-50%)",
-          width: 700, height: 700, borderRadius: "50%",
-          background: "radial-gradient(circle, rgba(0,194,168,0.10) 0%, transparent 65%)",
-          pointerEvents: "none",
-        }}
-      />
-      <div
-        style={{
-          position: "absolute", bottom: -200, right: "15%",
-          width: 500, height: 500, borderRadius: "50%",
-          background: "radial-gradient(circle, rgba(83,216,251,0.07) 0%, transparent 65%)",
-          pointerEvents: "none",
-        }}
-      />
-      {/* Grid */}
-      <div
-        style={{
-          position: "absolute", inset: 0, opacity: 0.025,
-          backgroundImage: "linear-gradient(rgba(0,194,168,1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,194,168,1) 1px, transparent 1px)",
-          backgroundSize: "44px 44px",
-          pointerEvents: "none",
-        }}
-      />
-
-      {/* Card */}
-      <div style={{ width: "100%", maxWidth: 460, position: "relative", zIndex: 1 }}>
-        <NHIDLogo />
-
-        <div
-          style={{
-            background: "rgba(255,255,255,0.03)",
-            border: "1px solid var(--nhid-border)",
-            borderRadius: 16, padding: "32px",
-            backdropFilter: "blur(20px)",
-            boxShadow: "0 24px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,194,168,0.04) inset",
-          }}
-        >
-          {createdKey ? (
-            <ApiKeyReveal
-              apiKey={createdKey}
-              orgName={createdOrg}
-              onContinue={() => setLocation("/dashboard")}
-            />
-          ) : (
-            <>
-              <div style={{ marginBottom: 28 }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: "var(--nhid-text)", letterSpacing: "-0.01em", marginBottom: 6 }}>
-                  Create your workspace
-                </div>
-                <div style={{ fontSize: 12, color: "var(--nhid-muted)", lineHeight: 1.7 }}>
-                  Get started free. Upgrade to a paid plan any time from your dashboard.
-                </div>
+    <EntryShell intro={<Intro />}>
+      <div className="card entry-card">
+        {created ? (
+          <KeyReveal apiKey={created.key} orgName={created.org} ownerInvited={created.invited}
+                     onContinue={() => setLocation("/dashboard")} />
+        ) : (
+          <>
+            <div className="tabs" role="tablist" aria-label="Get started">
+              <button type="button" role="tab" aria-selected={tab === "create"} onClick={() => setTab("create")}>Create workspace</button>
+              <button type="button" role="tab" aria-selected={tab === "key"} onClick={() => setTab("key")}>API key sign-in</button>
+            </div>
+            {!API_CONNECTED ? (
+              <div className="body">
+                <h2>{tab === "create" ? "Create a workspace" : "Sign in with an API key"}</h2>
+                <NotConnected what={tab === "create" ? "creating a workspace" : "signing in"} />
               </div>
-
-              <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-                  <FormField
-                    control={form.control}
-                    name="orgName"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nhid-muted)" }}>
-                          Organization Name
-                        </FormLabel>
-                        <FormControl>
-                          <input
-                            {...field}
-                            placeholder="e.g. MemorialHealth AI"
-                            autoFocus
-                            data-testid="input-orgname"
-                            style={{
-                              width: "100%", padding: "12px 14px", borderRadius: 9,
-                              background: "rgba(255,255,255,0.05)", border: "1px solid var(--nhid-border)",
-                              color: "var(--nhid-text)", fontSize: 14, outline: "none",
-                              fontFamily: "'Raleway', sans-serif",
-                              transition: "border-color 0.2s",
-                            }}
-                            onFocus={e => e.target.style.borderColor = "rgba(0,194,168,0.4)"}
-                            onBlur={e => e.target.style.borderColor = "var(--nhid-border)"}
-                          />
-                        </FormControl>
-                        <FormMessage style={{ fontSize: 11, color: "#ef4444" }} />
-                      </FormItem>
-                    )}
-                  />
-
-                  {/* Plan info — informational only, no form field */}
-                  <div
-                    style={{
-                      padding: "14px 16px", borderRadius: 10,
-                      background: "rgba(0,194,168,0.05)",
-                      border: "1px solid rgba(0,194,168,0.15)",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--nhid-teal)" }}>Free Plan</span>
-                      <span style={{ fontSize: 11, color: "var(--nhid-muted)" }}>$0 / month</span>
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--nhid-muted)", lineHeight: 1.6 }}>
-                      100 audit events/day · Tamper-evident trail · Chain verification
-                    </div>
-                    <div style={{ fontSize: 10, color: "var(--nhid-muted)", marginTop: 8, opacity: 0.7 }}>
-                      Upgrade to L1 / L2 / L3 from your dashboard after sign-up.
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    data-testid="button-submit"
-                    disabled={createOrg.isPending}
-                    style={{
-                      width: "100%", padding: "13px", borderRadius: 10,
-                      background: watchOrgName.trim().length >= 2
-                        ? "linear-gradient(135deg, #00c2a8, #53d8fb)"
-                        : "rgba(255,255,255,0.06)",
-                      border: "none",
-                      color: watchOrgName.trim().length >= 2 ? "#070c17" : "var(--nhid-muted)",
-                      fontSize: 14, fontWeight: 800,
-                      cursor: createOrg.isPending ? "not-allowed" : "pointer",
-                      fontFamily: "'Raleway', sans-serif",
-                      boxShadow: watchOrgName.trim().length >= 2 ? "0 0 30px rgba(0,194,168,0.35)" : "none",
-                      transition: "all 0.2s",
-                      opacity: createOrg.isPending ? 0.75 : 1,
-                      letterSpacing: "0.01em",
-                    }}
-                  >
-                    {createOrg.isPending ? "Creating workspace…" : "Get Started →"}
-                  </button>
-                </form>
-              </Form>
-            </>
-          )}
-        </div>
-
-        {/* Sign-in toggle */}
-        {!createdKey && (
-          <div style={{ marginTop: 18 }}>
-            {!showSignIn ? (
-              <div style={{ textAlign: "center" }}>
-                <button
-                  onClick={() => setShowSignIn(true)}
-                  style={{
-                    background: "none", border: "none", cursor: "pointer",
-                    fontSize: 12, color: "var(--nhid-muted)", fontFamily: "'Raleway', sans-serif",
-                    textDecoration: "underline", textDecorationStyle: "dotted",
-                    textUnderlineOffset: 3, padding: "4px 0",
-                    transition: "color 0.15s",
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.color = "var(--nhid-teal)")}
-                  onMouseLeave={e => (e.currentTarget.style.color = "var(--nhid-muted)")}
-                >
-                  Already have an API key? Sign in →
-                </button>
-              </div>
+            ) : tab === "create" ? (
+              <CreateForm onCreated={(key, org, invited) => setCreated({ key, org, invited })} />
             ) : (
-              <>
-                <div style={{ textAlign: "center", marginBottom: 14 }}>
-                  <button
-                    onClick={() => setShowSignIn(false)}
-                    style={{
-                      background: "none", border: "none", cursor: "pointer",
-                      fontSize: 12, color: "var(--nhid-muted)", fontFamily: "'Raleway', sans-serif",
-                      padding: "4px 0",
-                    }}
-                  >
-                    ← Back to sign up
-                  </button>
-                </div>
-                <SignInPanel onSuccess={() => setLocation("/dashboard")} />
-              </>
+              <KeySignIn onSuccess={() => setLocation("/dashboard")} />
             )}
-          </div>
+            <div className="alt">
+              <p>Team member? <Link href="/signin">Sign in with your work email</Link>.</p>
+              <p>Platform administrator? <Link href="/admin">Operations console</Link>.</p>
+            </div>
+          </>
         )}
-
-        <div style={{ textAlign: "center", marginTop: 20, fontSize: 11, color: "var(--nhid-muted)", opacity: 0.6 }}>
-          {/* Not "HIPAA-aligned": nothing here has been assessed against the
-              Security Rule, and the framework's own position is "mapped, not
-              certified". The strapline states what the product does. */}
-          NHID Clinical · Healthcare voice-AI governance monitoring and evidence
-        </div>
       </div>
-    </div>
+    </EntryShell>
   );
 }

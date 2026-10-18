@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Shield, LogOut, RefreshCw, Eye, EyeOff, Users, Activity, AlertCircle, Lock, PhoneCall } from "lucide-react";
-import { API_BASE_URL } from "@/lib/config";
+import { API_BASE_URL, API_CONNECTED } from "@/lib/config";
+import { Link } from "wouter";
+import { EntryShell, NotConnected } from "@/components/entry-shell";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -185,157 +187,62 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
     }
   };
 
-  const inputStyle = (disabled?: boolean): React.CSSProperties => ({
-    width: "100%", padding: "10px 13px", borderRadius: 9,
-    background: disabled ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.05)",
-    border: "1px solid rgba(0,194,168,0.15)", color: disabled ? "#4b5563" : "#e0e8f4",
-    fontSize: 14, outline: "none", fontFamily: "'Raleway', sans-serif",
-    transition: "border-color 0.2s", boxSizing: "border-box",
-  });
-
   return (
-    <div style={{
-      minHeight: "100dvh", background: "#070c17",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      position: "relative", overflow: "hidden", padding: 20,
-      fontFamily: "'Raleway', sans-serif",
-    }}>
-      {/* Ambient glow */}
-      <div style={{
-        position: "absolute", top: "30%", left: "50%", transform: "translate(-50%, -50%)",
-        width: 500, height: 500, borderRadius: "50%",
-        background: "radial-gradient(circle, rgba(0,194,168,0.08) 0%, transparent 65%)",
-        pointerEvents: "none",
-      }} />
-
-      <div style={{ width: "100%", maxWidth: 400, position: "relative", zIndex: 1 }}>
-        {/* Header */}
-        <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <div style={{ display: "inline-flex", marginBottom: 16 }}>
-            <NHIDMark size={52} />
+    <EntryShell single>
+      <div className="card entry-card">
+        <div className="body">
+          <div className="eyebrow" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <Lock size={11} aria-hidden="true" /> Platform administrators only
           </div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#e0e8f4", marginBottom: 4, letterSpacing: "-0.01em" }}>
-            Operations Console
-          </div>
-          <div style={{ fontSize: 12, color: "#7a8fa8", display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
-            <Lock size={11} />
-            Internal access only · Credentials required
-          </div>
+          <h2>Operations console</h2>
+          <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+            Sign in with the administrator credentials configured on the server
+            (<code>ADMIN_USER</code> and <code>ADMIN_PASS_HASH</code>). Organizations do not
+            sign in here.
+          </p>
+          {!API_CONNECTED ? (
+            <NotConnected what="the operations console" />
+          ) : (
+            <form onSubmit={submit} noValidate>
+              <div className="field">
+                <label htmlFor="admin-user">Username</label>
+                <input id="admin-user" value={username} onChange={e => setUsername(e.target.value)}
+                       autoComplete="username" required disabled={locked || loading} />
+              </div>
+              <div className="field">
+                <label htmlFor="admin-pass">Password</label>
+                <div style={{ position: "relative" }}>
+                  <input id="admin-pass" type={showPw ? "text" : "password"} value={password}
+                         onChange={e => setPassword(e.target.value)} autoComplete="current-password"
+                         required disabled={locked || loading} style={{ paddingRight: 44 }} />
+                  <button type="button" onClick={() => setShowPw(s => !s)}
+                          aria-label={showPw ? "Hide password" : "Show password"}
+                          style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)",
+                                   border: 0, background: "transparent", minHeight: 30, padding: "4px 8px" }}>
+                    {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+              </div>
+              {error && (
+                <div className="notice" role="alert" style={{ marginTop: 14, marginBottom: 0, display: "flex", gap: 8,
+                     background: "var(--ops-exception-soft)", borderColor: "#f1d0cd", borderLeftColor: "var(--ops-exception)",
+                     color: "var(--ops-exception)" }}>
+                  <AlertCircle size={14} style={{ marginTop: 2, flexShrink: 0 }} aria-hidden="true" />
+                  <span>{error}{locked && ` Retry in ${cooldownLeft}s.`}</span>
+                </div>
+              )}
+              <button type="submit" className="primary block" disabled={loading || locked}>
+                {locked ? `Locked — ${cooldownLeft}s` : loading ? "Authenticating…" : "Sign in"}
+              </button>
+            </form>
+          )}
         </div>
-
-        <div style={{
-          background: "rgba(255,255,255,0.03)",
-          border: "1px solid rgba(0,194,168,0.15)",
-          borderRadius: 16, padding: "28px 28px 24px",
-          backdropFilter: "blur(20px)",
-          boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
-        }}>
-          <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div>
-              <label style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#7a8fa8", marginBottom: 6 }}>
-                Username
-              </label>
-              <input
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                autoComplete="username"
-                required
-                disabled={locked || loading}
-                style={inputStyle(locked || loading)}
-                onFocus={e => { if (!locked) e.target.style.borderColor = "rgba(0,194,168,0.4)"; }}
-                onBlur={e => { e.target.style.borderColor = "rgba(0,194,168,0.15)"; }}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#7a8fa8", marginBottom: 6 }}>
-                Password
-              </label>
-              <div style={{ position: "relative" }}>
-                <input
-                  type={showPw ? "text" : "password"}
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  autoComplete="current-password"
-                  required
-                  disabled={locked || loading}
-                  style={{ ...inputStyle(locked || loading), paddingRight: 40 }}
-                  onFocus={e => { if (!locked) e.target.style.borderColor = "rgba(0,194,168,0.4)"; }}
-                  onBlur={e => { e.target.style.borderColor = "rgba(0,194,168,0.15)"; }}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPw(s => !s)}
-                  style={{
-                    position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
-                    background: "none", border: "none", cursor: "pointer", color: "#7a8fa8", padding: 2,
-                  }}
-                >
-                  {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
-                </button>
-              </div>
-            </div>
-
-            {error && (
-              <div style={{
-                display: "flex", alignItems: "flex-start", gap: 8,
-                background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.25)",
-                borderRadius: 8, padding: "10px 12px", color: "#f87171", fontSize: 12, lineHeight: 1.5,
-              }}>
-                <AlertCircle size={14} style={{ marginTop: 1, flexShrink: 0 }} />
-                <span>
-                  {error}
-                  {locked && ` Retry in ${cooldownLeft}s.`}
-                </span>
-              </div>
-            )}
-
-            {attempts > 0 && !locked && (
-              <div style={{
-                height: 3, background: "rgba(255,255,255,0.05)", borderRadius: 2, overflow: "hidden",
-              }}>
-                <div style={{
-                  height: "100%", borderRadius: 2,
-                  width: `${(attempts / MAX_ATTEMPTS) * 100}%`,
-                  background: attempts >= 3 ? "#ef4444" : "#fbbd24",
-                  transition: "width 0.3s ease",
-                }} />
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading || locked}
-              style={{
-                marginTop: 4, padding: "12px", borderRadius: 10, border: "none",
-                background: locked
-                  ? "rgba(239,68,68,0.15)"
-                  : loading
-                    ? "rgba(0,194,168,0.4)"
-                    : "linear-gradient(135deg, #00c2a8, #53d8fb)",
-                color: locked ? "#f87171" : "#070c17",
-                fontWeight: 800, fontSize: 14, cursor: (loading || locked) ? "not-allowed" : "pointer",
-                fontFamily: "'Raleway', sans-serif",
-                boxShadow: (!loading && !locked) ? "0 0 24px rgba(0,194,168,0.3)" : "none",
-                transition: "all 0.2s",
-              }}
-            >
-              {locked
-                ? `Locked — ${cooldownLeft}s`
-                : loading
-                  ? "Authenticating…"
-                  : "Sign In →"
-              }
-            </button>
-          </form>
-        </div>
-
-        <div style={{ textAlign: "center", marginTop: 16, fontSize: 10, color: "#7a8fa8", opacity: 0.5 }}>
-          Repeated failed attempts are rate-limited by the server and written to
-          the application log.
+        <div className="alt">
+          <p>Failed attempts are rate-limited by the server and written to the application log.</p>
+          <p>Looking for your organization&apos;s workspace? <Link href="/">Go to the sign-in page</Link>.</p>
         </div>
       </div>
-    </div>
+    </EntryShell>
   );
 }
 

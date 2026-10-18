@@ -131,6 +131,8 @@ export interface CreateOrgResult {
   org_name: string;
   api_key: string;
   plan: Plan;
+  /** True when an owner email was given and a sign-in link was sent to it. */
+  owner_invited?: boolean;
 }
 
 export interface StripePlanEntry {
@@ -167,7 +169,10 @@ async function req<T>(
     ...(opts.headers as Record<string, string>),
   };
   if (apiKey) headers["X-API-Key"] = apiKey;
-  if (adminKey) headers["X-Admin-Key"] = adminKey;
+  // The gateway authenticates admins by session token, read from X-Admin-Session
+  // (require_admin_session); an X-Admin-Key header was never checked and is not
+  // in the CORS allow-list either.
+  if (adminKey) headers["X-Admin-Session"] = adminKey;
 
   const res = await fetch(`${BASE}${path}`, { ...opts, headers });
   if (!res.ok) {
@@ -239,11 +244,19 @@ export const api = {
   /** Check if the gateway is reachable. */
   health: () => req<{ ok: boolean; service: string }>("/saas/health"),
 
-  /** Self-service org registration — free tier, no admin key required. */
-  registerOrg: (orgName: string): Promise<CreateOrgResult> =>
+  /**
+   * Self-service org registration — free tier, no admin key required. With an
+   * owner email the backend also creates that person as the org's owner and
+   * mails them a sign-in link; without one the org has no human who can ever
+   * use email sign-in.
+   */
+  registerOrg: (orgName: string, ownerEmail?: string): Promise<CreateOrgResult> =>
     req<CreateOrgResult>(
       "/saas/orgs/register",
-      { method: "POST", body: JSON.stringify({ org_name: orgName }) },
+      {
+        method: "POST",
+        body: JSON.stringify(ownerEmail ? { org_name: orgName, email: ownerEmail } : { org_name: orgName }),
+      },
     ),
 
   /** Create a new org (admin operation, internal only). */

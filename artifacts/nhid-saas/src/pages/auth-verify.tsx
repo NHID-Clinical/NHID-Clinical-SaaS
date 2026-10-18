@@ -17,7 +17,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { authApi } from "@/lib/auth-api";
 import { SESSION_QUERY_KEY } from "@/hooks/use-session";
-import { OPS_CSS } from "./ops/ops-ui";
+import { EntryShell } from "@/components/entry-shell";
 
 type State = { phase: "working" } | { phase: "failed"; detail: string };
 
@@ -57,9 +57,8 @@ export default function AuthVerify() {
   }, [navigate, queryClient]);
 
   return (
-    <div className="ops" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-      <style>{OPS_CSS}</style>
-      <div className="card" style={{ width: "min(440px, calc(100vw - 32px))", padding: "28px 30px" }}>
+    <EntryShell single>
+      <div className="card" style={{ padding: "28px 30px" }}>
         {state.phase === "working" ? (
           <>
             <h1 style={{ marginBottom: 6 }}>Signing you in…</h1>
@@ -74,12 +73,10 @@ export default function AuthVerify() {
               you already used, or one that sat in your inbox overnight, will
               land here.
             </p>
-            <Link href="/signin">
-              <button className="primary" style={{ marginTop: 10 }}>Get a new link</button>
-            </Link>
+            <Link href="/signin" className="btn primary" style={{ marginTop: 10 }}>Get a new link</Link>
           </>
         )}
       </div>
-    </div>
+    </EntryShell>
   );
 }

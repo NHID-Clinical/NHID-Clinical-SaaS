@@ -277,7 +277,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    # PUT is used by PUT /saas/voice/policy; without it the cross-origin
+    # preflight fails and the policy editor cannot save.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # Named rather than "*": these are the headers this API actually reads.
     allow_headers=["Content-Type", "X-API-Key", "X-Admin-Session", "X-NHID-API-Key"],
 )

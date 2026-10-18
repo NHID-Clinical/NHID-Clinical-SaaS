@@ -45,8 +45,8 @@ export function useOpsKey(): string {
 
 export function useCreateOrg() {
   return useMutation({
-    mutationFn: (data: { orgName: string }) =>
-      api.registerOrg(data.orgName),
+    mutationFn: (data: { orgName: string; ownerEmail?: string }) =>
+      api.registerOrg(data.orgName, data.ownerEmail),
     onSuccess: (data) => {
       localStorage.setItem("nhid_api_key", data.api_key);
       localStorage.setItem("nhid_org", JSON.stringify({ org_id: data.org_id, org_name: data.org_name, plan: data.plan }));

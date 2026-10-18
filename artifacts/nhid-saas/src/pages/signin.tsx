@@ -18,7 +18,8 @@ import { Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 
 import { authApi } from "@/lib/auth-api";
-import { OPS_CSS } from "./ops/ops-ui";
+import { EntryShell, NotConnected } from "@/components/entry-shell";
+import { API_CONNECTED } from "@/lib/config";
 
 export default function SignIn() {
   const [email, setEmail] = useState("");
@@ -33,12 +34,14 @@ export default function SignIn() {
   });
 
   return (
-    <div className="ops" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-      <style>{OPS_CSS}{EXTRA_CSS}</style>
+    <EntryShell single>
+      <style>{EXTRA_CSS}</style>
       <div className="signin-card card">
         <h1 style={{ marginBottom: 6 }}>Sign in</h1>
 
-        {sent ? (
+        {!API_CONNECTED ? (
+          <NotConnected what="email sign-in" />
+        ) : sent ? (
           <>
             <p className="muted" style={{ marginTop: 0 }}>
               If that address has access to an organization, a sign-in link is on its
@@ -96,13 +99,17 @@ export default function SignIn() {
           <Link href="/ops">Look around the recorded demonstration</Link> — no
           account needed, and nothing in it is customer data.
         </p>
+        <p className="muted small">
+          New organization? <Link href="/">Create a workspace</Link>. Platform
+          administrator? <Link href="/admin">Operations console</Link>.
+        </p>
       </div>
-    </div>
+    </EntryShell>
   );
 }
 
 const EXTRA_CSS = `
-.ops .signin-card { width: min(440px, calc(100vw - 32px)); padding: 28px 30px 24px; }
+.ops .signin-card { width: 100%; padding: 28px 30px 24px; }
 .ops .field-label { display:block; font-size:12px; font-weight:600; color:var(--ops-muted);
   text-transform:uppercase; letter-spacing:0.05em; }
 .ops .rule { border:0; border-top:1px solid var(--ops-border); margin:22px 0 16px; }

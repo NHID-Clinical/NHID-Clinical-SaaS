@@ -55,3 +55,15 @@ export function describeApiTarget(): string {
     ? API_BASE_URL
     : `${API_BASE_URL} (same origin, via the dev proxy)`;
 }
+
+/**
+ * Whether this build can reach a backend at all.
+ *
+ * A production build without `VITE_API_BASE_URL` -- the GitHub Pages
+ * demonstration -- has nothing behind `/saas-api`, so every sign-up and
+ * sign-in would fail with a generic error. Screens use this to say so
+ * plainly and send the reader to the recorded demonstration instead of
+ * offering a form that cannot work. In development the Vite proxy serves
+ * `/saas-api`, so the flag is true there.
+ */
+export const API_CONNECTED = IS_CROSS_ORIGIN_API || import.meta.env.DEV;
