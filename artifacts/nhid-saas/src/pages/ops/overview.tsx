@@ -8,13 +8,15 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { useOpsKey } from "@/hooks/use-nhid";
+import { useOpsKey, useApiKey } from "@/hooks/use-nhid";
 import { monitorApi, fmtPct, CATEGORY_LABEL } from "@/lib/monitoring-api";
 import { OpsShell, Metric, SyntheticNotice } from "./ops-ui";
 import { ControlOutcomes, FindingsByCategory } from "./ops-charts";
 
 export default function OpsOverview() {
   const apiKey = useOpsKey();
+  // Setup only exists for an organization holding its own key; the recorded demo has none.
+  const ownKey = !!useApiKey();
 
   const { data: metrics, isLoading } = useQuery({
     queryKey: ["ops-metrics"],
@@ -44,7 +46,10 @@ export default function OpsOverview() {
             Create an assessment and upload interactions you already have — call transcripts or
             event exports. Nothing in your production telephony needs to change.
           </p>
-          <Link href="/ops/assessments"><button className="primary">Go to assessments</button></Link>
+          <div className="toolbar" style={{ justifyContent: "center", marginBottom: 0 }}>
+            <Link href="/ops/assessments"><button className="primary">Go to assessments</button></Link>
+            {ownKey && <Link href="/setup"><button>Run first-time setup</button></Link>}
+          </div>
         </div>
       </OpsShell>
     );

@@ -8,6 +8,7 @@ import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/layout";
 import Onboarding from "@/pages/onboarding";
 import Dashboard from "@/pages/dashboard";
+import SetupPage from "@/pages/setup";
 import Usage from "@/pages/usage";
 import Trace from "@/pages/trace";
 import Proof from "@/pages/proof";
@@ -84,6 +85,7 @@ function Router() {
             <Route path="/" component={Onboarding} />
             <Route path="/onboarding" component={Onboarding} />
             <Route path="/dashboard"><ProtectedRoute component={Dashboard} /></Route>
+            <Route path="/setup"><ProtectedRoute component={SetupPage} /></Route>
             <Route path="/usage"><ProtectedRoute component={Usage} /></Route>
             <Route path="/trace"><ProtectedRoute component={Trace} /></Route>
             <Route path="/proof"><ProtectedRoute component={Proof} /></Route>

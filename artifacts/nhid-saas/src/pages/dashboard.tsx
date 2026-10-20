@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { useGetMe, useGetRecent, useVoicePolicy, useSaveVoicePolicy } from "@/hooks/use-nhid";
 import { VoicePolicyRule } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SetupChecklist } from "@/components/setup-checklist";
 import { format } from "date-fns";
 import {
   Activity, ShieldCheck, Zap, Server, Mic,
@@ -616,6 +617,8 @@ export default function Dashboard() {
           Overview for <strong style={{ color: "var(--nhid-text)", fontWeight: 700 }}>{profile.org_name}</strong>
         </p>
       </div>
+
+      <SetupChecklist />
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
