@@ -78,7 +78,7 @@ function KeyReveal({ apiKey, orgName, ownerInvited, onContinue }: {
           A sign-in link is on its way to the owner&apos;s email, for signing in as a person.
         </p>
       )}
-      <button type="button" className="primary block" onClick={onContinue}>Continue to dashboard</button>
+      <button type="button" className="primary block" onClick={onContinue}>Continue to setup</button>
     </div>
   );
 }
@@ -203,7 +203,7 @@ export default function Onboarding() {
       <div className="card entry-card">
         {created ? (
           <KeyReveal apiKey={created.key} orgName={created.org} ownerInvited={created.invited}
-                     onContinue={() => setLocation("/dashboard")} />
+                     onContinue={() => setLocation("/setup")} />
         ) : (
           <>
             <div className="tabs" role="tablist" aria-label="Get started">

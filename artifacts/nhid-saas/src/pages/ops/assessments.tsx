@@ -15,12 +15,14 @@ import { useOpsKey } from "@/hooks/use-nhid";
 import { monitorApi } from "@/lib/monitoring-api";
 import { OpsShell } from "./ops-ui";
 import { DEMO_INTERACTIONS } from "./demo-data";
+import { readVendor } from "@/hooks/use-setup";
 
 export default function OpsAssessments() {
   const apiKey = useOpsKey();
   const qc = useQueryClient();
   const [name, setName] = useState("");
-  const [vendor, setVendor] = useState("generic");
+  // Preselects the format chosen in first-time setup, when one was.
+  const [vendor, setVendor] = useState<string>(() => readVendor() ?? "generic");
   const [payload, setPayload] = useState("");
   const [target, setTarget] = useState("");
   const [message, setMessage] = useState("");
