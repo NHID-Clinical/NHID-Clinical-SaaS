@@ -78,7 +78,7 @@ from saas_layer.admin_auth import (
     verify_password,
     verify_username,
 )
-from saas_layer import audit as audit_svc
+from saas_layer import activity, audit as audit_svc
 from saas_layer.voice_policy import run_voice_policy
 from saas_layer import voice_policy_store
 from saas_layer.voice_sessions import (
@@ -1078,6 +1078,9 @@ async def invite_org_member(body: InviteMemberRequest,
 
     _logger.info("AUTH: member added org=%s user_id=%s role=%s",
                  org["org_id"], invited["user_id"], body.role)
+    activity.record(org["org_id"], actor=user["email"], action="member.added",
+                    target=invited["user_id"],
+                    detail={"email": invited["email"], "role": body.role})
     return {"user_id": invited["user_id"], "email": invited["email"],
             "role": body.role, "invite_delivered": delivered}
 
@@ -1110,6 +1113,8 @@ async def remove_org_member(member_user_id: str,
     if not user_auth.orgs_for_user(member_user_id):
         user_auth.delete_sessions_for_user(member_user_id)
     _logger.info("AUTH: member removed org=%s user_id=%s", org["org_id"], member_user_id)
+    activity.record(org["org_id"], actor=user["email"], action="member.removed",
+                    target=member_user_id, detail={"role": membership["role"]})
     return {"status": "removed", "user_id": member_user_id}
 
 
@@ -1267,6 +1272,10 @@ async def create_org_key(body: CreateKeyRequest,
         raise HTTPException(status_code=422, detail=str(exc))
     _logger.info("KEYS: created org=%s key_id=%s scope=%s by=%s",
                  org["org_id"], created["key_id"], created["scope"], user["user_id"])
+    activity.record(org["org_id"], actor=user["email"], action="key.created",
+                    target=created["key_id"],
+                    detail={"label": created["label"], "scope": created["scope"],
+                            "expires_at": created["expires_at"]})
     created["note"] = ("Store this now. It is hashed on the server and cannot "
                        "be shown again.")
     return created
@@ -1288,7 +1297,93 @@ async def revoke_org_key(key_id: str,
         raise HTTPException(status_code=404, detail="Key not found or already revoked")
     _logger.info("KEYS: revoked org=%s key_id=%s by=%s",
                  org["org_id"], key_id, user["user_id"])
+    activity.record(org["org_id"], actor=user["email"], action="key.revoked", target=key_id)
     return {"key_id": key_id, "revoked": True}
+
+
+@app.get("/saas/orgs/activity", tags=["Org"])
+async def org_activity(org: Dict = Depends(get_current_org),
+                       format: str = Query(default="json", pattern="^(json|csv)$"),
+                       limit: int = Query(default=1000, ge=1, le=10_000),
+                       since: Optional[str] = Query(default=None)):
+    """Every administrative change to this organization, newest first.
+
+    `format=csv` downloads the same rows as a spreadsheet for an auditor.
+    Read-only: there is no route that edits or deletes an entry.
+    """
+    events = activity.list_events(org["org_id"], limit=limit, since=since)
+    if format == "csv":
+        import csv as _csv
+        import io as _io
+        import json as _json
+        buf = _io.StringIO()
+        writer = _csv.writer(buf)
+        writer.writerow(["occurred_at", "actor", "action", "target", "detail"])
+        for e in events:
+            writer.writerow([e["occurred_at"], e["actor"], e["action"], e["target"] or "",
+                             _json.dumps(e["detail"], sort_keys=True)])
+        return Response(
+            content=buf.getvalue(), media_type="text/csv",
+            headers={"Content-Disposition":
+                     f'attachment; filename="nhid-activity-{org["org_id"]}.csv"'})
+    return {"events": events, "actions": list(activity.ACTIONS)}
+
+
+# What the trust center states is NOT in place. Kept beside the code so the
+# console never shows a reassuring page without them (docs/ENTERPRISE-SECURITY-REVIEW.md §7).
+SECURITY_GAPS = (
+    {"id": "soc2", "title": "No SOC 2 report",
+     "detail": "No SOC 2 Type I or II audit has been performed."},
+    {"id": "baa", "title": "No signed BAA",
+     "detail": "Hosting transcripts that may contain PHI requires a BAA; none is in place."},
+    {"id": "pentest", "title": "No third-party penetration test",
+     "detail": "Automated dependency, static-analysis and header checks run in CI. "
+               "They are not a penetration test."},
+    {"id": "validation", "title": "No independent validation",
+     "detail": "Every published figure is self-measured."},
+)
+
+
+@app.get("/saas/orgs/security", tags=["Org"])
+async def org_security_summary(org: Dict = Depends(get_current_org)):
+    """The trust-center snapshot for this organization: keys, members,
+    retention, recent administrative activity, and the stated gaps."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    now = _dt.now(_tz.utc)
+    keys = [k for k in list_scoped_keys(org["org_id"]) if k["active"]]
+    soon = now + _td(days=14)
+    by_scope: Dict[str, int] = {}
+    for k in keys:
+        by_scope[k["scope"]] = by_scope.get(k["scope"], 0) + 1
+    members = user_auth.list_members(org["org_id"])
+    by_role: Dict[str, int] = {}
+    for m in members:
+        by_role[m["role"]] = by_role.get(m["role"], 0) + 1
+    retention = monitoring.retention_status(org["org_id"])
+    since = (now - _td(days=30)).isoformat()
+    return {
+        "keys": {
+            "active": len(keys),
+            "expiring_within_14_days": sum(
+                1 for k in keys if _dt.fromisoformat(k["expires_at"]) <= soon),
+            "by_scope": by_scope,
+            "primary_key_prefix": org.get("api_key_prefix"),
+        },
+        "members": {"total": len(members), "by_role": by_role},
+        "retention": {"effective_days": retention["retention_days"],
+                      "policy_source": retention["policy_source"],
+                      "transcripts_held": retention["transcripts_held"],
+                      "oldest_held_at": retention["oldest_held_at"]},
+        "activity": {"events_last_30_days": len(
+            activity.list_events(org["org_id"], limit=10_000, since=since))},
+        "controls": [
+            "Scoped, expiring API keys", "Read-only auditor role",
+            "Hash-chained audit trail (HMAC-SHA256)", "Append-only activity log",
+            "Security headers on every response", "Transcript retention with provable purge",
+            "Dependency audit, static analysis and SBOM in CI",
+        ],
+        "gaps": list(SECURITY_GAPS),
+    }
 
 
 @app.post("/saas/orgs/rotate-key")
@@ -1313,6 +1408,8 @@ async def rotate_my_key(org: Dict = Depends(get_current_org)):
     if not new_key:
         raise HTTPException(status_code=404, detail="Organization not found.")
     log_request(org["org_id"], "/saas/orgs/rotate-key", "POST", 200, None)
+    activity.record(org["org_id"], actor=activity.actor_for(org),
+                    action="primary_key.rotated")
     return {
         "org_id": org["org_id"],
         "api_key": new_key,
@@ -3076,6 +3173,8 @@ async def monitor_purge_transcripts(
         org["org_id"], before_days=body.before_days)
     _logger.info("RETENTION: org=%s purged=%d by user=%s before_days=%s",
                  org["org_id"], purged, user["user_id"], body.before_days)
+    activity.record(org["org_id"], actor=user["email"], action="transcripts.purged",
+                    detail={"purged": purged, "before_days": body.before_days})
     return {"purged": purged, "before_days": body.before_days,
             "requested_by": user["email"]}
 
@@ -3099,6 +3198,8 @@ async def monitor_purge_one_transcript(
     if purged:
         _logger.info("RETENTION: org=%s interaction=%s purged by user=%s",
                      org["org_id"], interaction_id, user["user_id"])
+        activity.record(org["org_id"], actor=user["email"], action="transcript.purged",
+                        target=interaction_id)
     return {"interaction_id": interaction_id, "purged": purged}
 
 

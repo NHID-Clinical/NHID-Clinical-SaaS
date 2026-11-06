@@ -155,6 +155,33 @@ who resolved a finding fails the first question an auditor asks about itself.
 
 ---
 
+## 4a. Activity log and trust center
+
+- **Activity log.** Every administrative change is recorded in `org_activity`
+  (`migrations/0008_org_activity.sql`, `saas_layer/activity.py`):
+  - key created or revoked;
+  - primary key rotated;
+  - member added or removed;
+  - transcripts purged.
+
+  Each entry names the person, or the credential when a machine acted.
+- **Export.** The organization reads it at `GET /saas/orgs/activity` and
+  exports it with `format=csv` for an auditor.
+- **Append-only.** The application has no route that edits or deletes an
+  entry; `tests/test_activity_log.py` checks every write method.
+- **Security & audit page.** The console page (`/security`) shows:
+  - active keys, and those expiring within 14 days;
+  - members by role;
+  - retention;
+  - the key inventory with revoke;
+  - the activity log with export;
+  - the controls in place beside the gaps that are not.
+
+  The gaps come from the API (`gateway.SECURITY_GAPS`), so the page cannot
+  show a reassuring picture without them.
+
+![The Security & audit page](images/security-trust-center.png)
+
 ## 5. Tenant isolation
 
 Every organization-scoped query takes `org_id` from the **resolved credential**,

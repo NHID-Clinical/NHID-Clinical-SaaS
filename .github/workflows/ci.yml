@@ -223,7 +223,9 @@ jobs:
         run: pnpm run typecheck
 
       - name: Run tests
-        run: pnpm -C artifacts/nhid-clinical-operations run test
+        run: |
+          pnpm -C artifacts/nhid-clinical-operations run test
+          pnpm -C artifacts/nhid-saas run test
 
       - name: Build customer frontend
         # PORT and BASE_PATH are required by vite.config.ts. BASE_PATH is "/"

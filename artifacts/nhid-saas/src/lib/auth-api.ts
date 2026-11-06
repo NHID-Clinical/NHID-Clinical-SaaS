@@ -95,7 +95,7 @@ export const authApi = {
     authReq<{ members: OrgMember[]; your_role: "owner" | "member" }>(
       "/saas/orgs/members", {}, apiKey),
 
-  invite: (apiKey: string, email: string, role: "owner" | "member") =>
+  invite: (apiKey: string, email: string, role: "owner" | "member" | "auditor") =>
     authReq<{ user_id: string; email: string; role: string; invite_delivered: boolean }>(
       "/saas/orgs/members",
       { method: "POST", body: JSON.stringify({ email, role }) }, apiKey),

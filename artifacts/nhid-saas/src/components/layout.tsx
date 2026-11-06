@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard,
   ClipboardCheck, Shield, Search, BarChart2,
-  X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard, ShieldCheck, Zap, Settings2,
+  X, Menu, LogIn, ChevronRight, LogOut, Activity, CreditCard, ShieldCheck, Zap, Settings2, Lock,
 } from "lucide-react";
 import { useApiKey } from "@/hooks/use-nhid";
 import { apiUrl } from "@/lib/config";
@@ -36,6 +36,7 @@ const NAV_ITEMS = [
   { name: "Proof Lookup", href: "/proof", icon: Search, desc: "Lightweight session proof" },
   { name: "Usage", href: "/usage", icon: BarChart2, desc: "API usage stats" },
   { name: "Billing", href: "/billing", icon: CreditCard, desc: "Plans & upgrade" },
+  { name: "Security", href: "/security", icon: Lock, desc: "Keys, activity log, gaps" },
   { name: "Settings", href: "/settings", icon: Settings2, desc: "API key, plan, preferences" },
 ];
 
@@ -416,7 +417,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         style={{
           width: 230, flexShrink: 0,
           borderRight: "1px solid #dfe5ec",
-          display: "flex", flexDirection: "column",
+          // No inline `display`: it would override the `hidden` class below and
+          // keep the desktop sidebar on screen at phone widths.
+          flexDirection: "column",
           position: "sticky", top: 0, height: "100dvh",
           overflowY: "auto",
         }}

@@ -19,6 +19,7 @@ import TryPage from "@/pages/try";
 import DocsSDKPage from "@/pages/docs-sdk";
 import PricingPage from "@/pages/pricing";
 import SettingsPage from "@/pages/settings";
+import SecurityPage from "@/pages/security";
 import SignIn from "@/pages/signin";
 import AuthVerify from "@/pages/auth-verify";
 import OpsOverview from "@/pages/ops/overview";
@@ -92,6 +93,7 @@ function Router() {
             <Route path="/audit"><ProtectedRoute component={AuditPage} /></Route>
             <Route path="/billing"><ProtectedRoute component={Billing} /></Route>
             <Route path="/settings"><ProtectedRoute component={SettingsPage} /></Route>
+            <Route path="/security"><ProtectedRoute component={SecurityPage} /></Route>
 
             {/* Governance operations — the monitoring and evidence product.
                 Deliberately not wrapped in ProtectedRoute, unlike every route
