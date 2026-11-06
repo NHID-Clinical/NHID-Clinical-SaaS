@@ -52,6 +52,7 @@ from typing import Optional, Any, Dict, List
 
 from saas_layer.auth import (
     init_db, create_org, validate_api_key, get_org, rotate_api_key,
+    create_scoped_key, list_scoped_keys, revoke_scoped_key,
     list_orgs, increment_usage,
     create_admin_session, validate_admin_session,
     delete_admin_session, purge_expired_admin_sessions,
@@ -360,33 +361,98 @@ if os.environ.get("NHID_SKIP_SCHEMA_BOOTSTRAP", "").strip() not in ("1", "true",
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
+# Routes an `ingest`-scoped key may call: the ones that put evidence in. It
+# cannot read any of it back, manage members or keys, or resolve findings.
+INGEST_ROUTES = frozenset({
+    ("POST", "/saas/monitor/assessments"),
+    ("POST", "/saas/monitor/ingest"),
+    ("POST", "/saas/monitor/assessments/{assessment_id}/evaluate"),
+    ("POST", "/saas/trace"),
+    ("POST", "/saas/voice/incoming"),
+    ("POST", "/saas/voice/transcript"),
+    ("POST", "/saas/voice/authorize"),
+    ("POST", "/saas/voice/webhook/incoming"),
+    ("POST", "/saas/voice/webhook/transcript"),
+    ("POST", "/saas/pilot/runs"),
+})
+READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _route_path(request: Request) -> str:
+    """The matched route's template (e.g. `/saas/monitor/findings/{finding_id}`),
+    so a scope rule names routes, not whatever IDs a caller put in the URL."""
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or request.url.path
+
+
+def enforce_key_scope(org: Dict[str, Any], method: str, route_path: str) -> None:
+    """Refuse a request the presenting key's scope does not cover (403)."""
+    scope = org.get("_key_scope", "full")
+    if scope == "full":
+        return
+    if scope == "read" and method.upper() in READ_METHODS:
+        return
+    if scope == "ingest" and (method.upper(), route_path) in INGEST_ROUTES:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(f"This API key's scope is '{scope}', which does not cover "
+                f"{method.upper()} {route_path}."),
+    )
+
+
+def _enforce_auditor_read_only(org_id: str, nhid_session: Optional[str], method: str) -> None:
+    """A signed-in member whose role is `auditor` can look and cannot change
+    anything, whichever key the browser happens to hold."""
+    if method.upper() in READ_METHODS or not nhid_session:
+        return
+    user = user_auth.resolve_session(nhid_session)
+    if user is None:
+        return
+    membership = user_auth.get_membership(org_id, user["user_id"])
+    if membership and membership["role"] == user_auth.ROLE_AUDITOR:
+        raise HTTPException(
+            status_code=403,
+            detail="Auditors have read-only access to this organization.",
+        )
+
+
 def get_current_org(
+    request: Request = None,  # injected by FastAPI; None only for direct calls
     x_api_key: Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
+    nhid_session: Optional[str] = Cookie(default=None, alias="nhid_session"),
 ) -> Dict[str, Any]:
     """Resolve the calling organization from one of two machine credentials.
 
     Two paths, X-API-Key checked first and unchanged:
 
-      * `X-API-Key: <key>`          — the original static key (0001).
+      * `X-API-Key: <key>`          — the primary key (0001), or a scoped,
+                                      expiring key (0007);
       * `Authorization: Bearer <t>` — a short-lived token minted by
                                       POST /saas/auth/token (RFC 8693, 0005).
 
     Both resolve to the SAME org dict shape, so no downstream route can tell
     which credential was used, and a request that carries both is authenticated
     by the key — there is no mixing, one credential decides.
+
+    Then two read-only rules apply before any route runs: a scoped key may only
+    do what its scope covers, and a signed-in auditor may only read.
     """
     if x_api_key:
         org = validate_api_key(x_api_key)
         if not org:
-            raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-        return org
-    if authorization and authorization.startswith("Bearer "):
+            raise HTTPException(status_code=403, detail="Invalid, expired or revoked API key")
+    elif authorization and authorization.startswith("Bearer "):
         org = oauth_exchange.resolve_token(authorization[len("Bearer "):].strip())
         if not org:
             raise HTTPException(status_code=403, detail="Invalid or expired token")
-        return org
-    raise HTTPException(status_code=401, detail="X-API-Key header required")
+    else:
+        raise HTTPException(status_code=401, detail="X-API-Key header required")
+    if request is not None:
+        enforce_key_scope(org, request.method, _route_path(request))
+        _enforce_auditor_read_only(org["org_id"], nhid_session, request.method)
+    return org
 
 
 
@@ -1137,6 +1203,58 @@ async def get_my_org(org: Dict = Depends(get_current_org)):
     }
 
 
+# ── Scoped API keys ───────────────────────────────────────────────────────────
+#
+# Additional keys with a scope and an expiry (migrations/0007). Minting and
+# revoking need an owner's session as well as the organization credential, as
+# member management does: a leaked key must not be able to mint itself a
+# longer-lived sibling.
+
+
+class CreateKeyRequest(BaseModel):
+    label: str
+    scope: str
+    expires_in_days: int = 90
+
+
+@app.post("/saas/orgs/keys", status_code=201, tags=["Org"])
+async def create_org_key(body: CreateKeyRequest,
+                         org: Dict = Depends(get_current_org),
+                         user: Dict = Depends(current_user)):
+    """Mint a scoped, expiring key. The plaintext is in this response only."""
+    _require_owner(org["org_id"], user, "create API keys")
+    try:
+        created = create_scoped_key(
+            org["org_id"], label=body.label, scope=body.scope,
+            expires_in_days=body.expires_in_days, created_by=user["email"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    _logger.info("KEYS: created org=%s key_id=%s scope=%s by=%s",
+                 org["org_id"], created["key_id"], created["scope"], user["user_id"])
+    created["note"] = ("Store this now. It is hashed on the server and cannot "
+                       "be shown again.")
+    return created
+
+
+@app.get("/saas/orgs/keys", tags=["Org"])
+async def list_org_keys(org: Dict = Depends(get_current_org)):
+    """Every scoped key, with scope, expiry, revocation and last use. No secrets."""
+    return {"keys": list_scoped_keys(org["org_id"])}
+
+
+@app.delete("/saas/orgs/keys/{key_id}", tags=["Org"])
+async def revoke_org_key(key_id: str,
+                         org: Dict = Depends(get_current_org),
+                         user: Dict = Depends(current_user)):
+    """Revoke a scoped key now. Owner session required."""
+    _require_owner(org["org_id"], user, "revoke API keys")
+    if not revoke_scoped_key(org["org_id"], key_id, revoked_by=user["email"]):
+        raise HTTPException(status_code=404, detail="Key not found or already revoked")
+    _logger.info("KEYS: revoked org=%s key_id=%s by=%s",
+                 org["org_id"], key_id, user["user_id"])
+    return {"key_id": key_id, "revoked": True}
+
+
 @app.post("/saas/orgs/rotate-key")
 async def rotate_my_key(org: Dict = Depends(get_current_org)):
     """Issue a new API key for the calling org and invalidate the old one.
@@ -1148,8 +1266,13 @@ async def rotate_my_key(org: Dict = Depends(get_current_org)):
     does not store it has to rotate again.
 
     Authenticated with the key being replaced, so only the current holder can
-    do it.
+    do it. A scoped key cannot rotate the primary key it is not.
     """
+    if org.get("_key_id"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the organization's primary key can rotate itself. "
+                   "Revoke a scoped key with DELETE /saas/orgs/keys/{key_id}.")
     new_key = rotate_api_key(org["org_id"])
     if not new_key:
         raise HTTPException(status_code=404, detail="Organization not found.")
@@ -2073,6 +2196,8 @@ async def voice_webhook_incoming(
         x_nhid_api_key, api_key, "/saas/voice/webhook/incoming"
     )
     org = validate_api_key(api_key)
+    if org:
+        enforce_key_scope(org, request.method, _route_path(request))
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
 
@@ -2173,6 +2298,8 @@ async def voice_webhook_transcript(
         x_nhid_api_key, api_key, "/saas/voice/webhook/transcript"
     )
     org = validate_api_key(api_key)
+    if org:
+        enforce_key_scope(org, request.method, _route_path(request))
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
 

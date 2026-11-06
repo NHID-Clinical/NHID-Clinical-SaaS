@@ -47,6 +47,35 @@ Two credential types, deliberately separate.
 **Organization API keys** — SHA-256 hashed at rest; the raw value is returned
 once at creation and never retrievable afterwards (`saas_layer/api_keys.py:57`).
 
+**Scoped, expiring keys** (`migrations/0007_scoped_api_keys.sql`).
+
+- **Scopes.** Besides the primary key, an owner can mint keys that carry one
+  scope:
+  - `ingest`: only the routes that put evidence in (`gateway.INGEST_ROUTES`);
+  - `read`: GET only;
+  - `full`.
+- **Expiry and revocation.** Every scoped key expires within 1 to 365 days
+  (default 90). It can be revoked at once (`DELETE /saas/orgs/keys/{key_id}`),
+  and the revocation is stamped with who did it.
+- **Who can manage them.** Minting and revoking need an owner's session as well
+  as the organization credential, so a leaked key cannot mint itself a
+  longer-lived sibling. A scoped key cannot rotate the primary key.
+- **Visibility.** `GET /saas/orgs/keys` lists every key with its scope, expiry,
+  revocation and last use. It never shows a secret.
+- **Enforcement.** The scope is enforced centrally in `get_current_org`, before
+  any route runs, and on the webhook routes that authenticate by query or
+  header.
+- **Tests.** `tests/test_scoped_keys.py`.
+
+**Roles.** There are three roles:
+- `owner`: manages members and keys, and purges;
+- `member`: does everything else;
+- `auditor`: read-only.
+
+A signed-in auditor is refused every non-read request whichever key the
+browser holds (`gateway._enforce_auditor_read_only`). To make that hold without
+the browser too, give an auditor a `read` key rather than the primary key.
+
 **Human sign-in — no passwords exist.** No password storage, no reset flow, no
 password reuse exposure (`saas_layer/user_auth.py:39`). Instead:
 
