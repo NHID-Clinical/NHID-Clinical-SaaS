@@ -57,9 +57,12 @@ export default defineConfig({
       prettier: true,
       override: {
         zod: {
+          // 'string' is not coerced: query and path values already arrive as
+          // strings, and zod 4's coerced string has no format methods (.url()),
+          // so coercing it only broke the generated schemas.
           coerce: {
-            query: ['boolean', 'number', 'string'],
-            param: ['boolean', 'number', 'string'],
+            query: ['boolean', 'number'],
+            param: ['boolean', 'number'],
             body: ['bigint', 'date'],
             response: ['bigint', 'date'],
           },

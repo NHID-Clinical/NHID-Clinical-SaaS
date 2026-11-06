@@ -322,6 +322,17 @@ def create_org(org_name: str, plan: str = "free") -> Dict[str, Any]:
     return {"org_id": org_id, "org_name": org_name, "api_key": api_key, "plan": plan}
 
 
+# Scopes a key can carry (migrations/0007_scoped_api_keys.sql). The primary key
+# on the `orgs` row is always FULL.
+SCOPE_INGEST = "ingest"
+SCOPE_READ = "read"
+SCOPE_FULL = "full"
+KEY_SCOPES = (SCOPE_INGEST, SCOPE_READ, SCOPE_FULL)
+# A scoped key always expires. A year is the ceiling so an override cannot
+# quietly become "forever", the same reasoning as transcript retention.
+MAX_KEY_DAYS = 365
+
+
 def validate_api_key(api_key: str) -> Optional[Dict[str, Any]]:
     """Resolve a presented key to its org, or None.
 
@@ -329,18 +340,126 @@ def validate_api_key(api_key: str) -> Optional[Dict[str, Any]]:
     database never holds anything replayable. This is still a single indexed
     equality lookup -- the hash *is* the index -- so it costs what the old
     plaintext comparison cost.
+
+    The org's primary key resolves with `_key_scope = "full"`. A scoped key
+    (`org_api_keys`) resolves only while it is unrevoked and unexpired, with its
+    own scope and id attached, so the gateway can enforce the scope.
     """
     if not api_key:
         return None
+    digest = hash_key(api_key)
     conn = get_conn()
     try:
         cur = conn.cursor()
         cur.execute(
             "SELECT * FROM orgs WHERE api_key_sha256 = %s AND active = TRUE",
-            (hash_key(api_key),),
+            (digest,),
         )
         row = cur.fetchone()
-        return dict(row) if row else None
+        if row:
+            org = dict(row)
+            org["_key_scope"] = SCOPE_FULL
+            org["_key_id"] = None
+            return org
+        cur.execute(
+            """SELECT k.key_id, k.scope, o.*
+               FROM org_api_keys k JOIN orgs o ON o.org_id = k.org_id
+               WHERE k.key_sha256 = %s AND o.active = TRUE
+                 AND k.revoked_at IS NULL AND k.expires_at > NOW()""",
+            (digest,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        org = dict(row)
+        org["_key_scope"] = org.pop("scope")
+        org["_key_id"] = org.pop("key_id")
+        # Last use, written at most once a minute per key so the auth path is
+        # not a write on every request.
+        with conn:
+            cur.execute(
+                """UPDATE org_api_keys SET last_used_at = NOW()
+                   WHERE key_id = %s AND (last_used_at IS NULL
+                         OR last_used_at < NOW() - INTERVAL '60 seconds')""",
+                (org["_key_id"],),
+            )
+        return org
+    finally:
+        conn.close()
+
+
+def create_scoped_key(org_id: str, *, label: str, scope: str, expires_in_days: int,
+                      created_by: Optional[str]) -> Dict[str, Any]:
+    """Mint a scoped, expiring key. Returns the plaintext once."""
+    if scope not in KEY_SCOPES:
+        raise ValueError(f"scope must be one of {list(KEY_SCOPES)}")
+    if not isinstance(expires_in_days, int) or not 1 <= expires_in_days <= MAX_KEY_DAYS:
+        raise ValueError(f"expires_in_days must be between 1 and {MAX_KEY_DAYS}")
+    label = (label or "").strip()
+    if not label or len(label) > 80:
+        raise ValueError("label must be 1 to 80 characters")
+    api_key = generate_key()
+    key_id = f"key_{uuid.uuid4().hex[:16]}"
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """INSERT INTO org_api_keys
+                   (key_id, org_id, label, key_sha256, key_prefix, scope,
+                    created_by, expires_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s, NOW() + make_interval(days => %s))
+                   RETURNING created_at, expires_at""",
+                (key_id, org_id, label, hash_key(api_key), key_prefix(api_key),
+                 scope, created_by, expires_in_days),
+            )
+            row = dict(cur.fetchone())
+    finally:
+        conn.close()
+    return {"key_id": key_id, "api_key": api_key, "label": label, "scope": scope,
+            "key_prefix": key_prefix(api_key),
+            "created_at": row["created_at"].isoformat(),
+            "expires_at": row["expires_at"].isoformat()}
+
+
+def list_scoped_keys(org_id: str) -> list:
+    """Every scoped key this org has minted, newest first. No secrets."""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT key_id, label, key_prefix, scope, created_at, created_by,
+                      expires_at, revoked_at, revoked_by, last_used_at,
+                      (revoked_at IS NULL AND expires_at > NOW()) AS active
+               FROM org_api_keys WHERE org_id = %s ORDER BY created_at DESC""",
+            (org_id,),
+        )
+        out = []
+        for row in cur.fetchall():
+            item = dict(row)
+            for k in ("created_at", "expires_at", "revoked_at", "last_used_at"):
+                if item.get(k) is not None:
+                    item[k] = item[k].isoformat()
+            out.append(item)
+        return out
+    finally:
+        conn.close()
+
+
+def revoke_scoped_key(org_id: str, key_id: str, *, revoked_by: Optional[str]) -> bool:
+    """Revoke one of this org's keys. False if it is not this org's, or already
+    revoked: the two are not distinguished, so this reports nothing about other
+    tenants' keys."""
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """UPDATE org_api_keys SET revoked_at = NOW(), revoked_by = %s
+                   WHERE key_id = %s AND org_id = %s AND revoked_at IS NULL""",
+                (revoked_by, key_id, org_id),
+            )
+            return cur.rowcount == 1
     finally:
         conn.close()
 

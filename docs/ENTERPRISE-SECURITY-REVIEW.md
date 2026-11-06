@@ -47,6 +47,35 @@ Two credential types, deliberately separate.
 **Organization API keys** — SHA-256 hashed at rest; the raw value is returned
 once at creation and never retrievable afterwards (`saas_layer/api_keys.py:57`).
 
+**Scoped, expiring keys** (`migrations/0007_scoped_api_keys.sql`).
+
+- **Scopes.** Besides the primary key, an owner can mint keys that carry one
+  scope:
+  - `ingest`: only the routes that put evidence in (`gateway.INGEST_ROUTES`);
+  - `read`: GET only;
+  - `full`.
+- **Expiry and revocation.** Every scoped key expires within 1 to 365 days
+  (default 90). It can be revoked at once (`DELETE /saas/orgs/keys/{key_id}`),
+  and the revocation is stamped with who did it.
+- **Who can manage them.** Minting and revoking need an owner's session as well
+  as the organization credential, so a leaked key cannot mint itself a
+  longer-lived sibling. A scoped key cannot rotate the primary key.
+- **Visibility.** `GET /saas/orgs/keys` lists every key with its scope, expiry,
+  revocation and last use. It never shows a secret.
+- **Enforcement.** The scope is enforced centrally in `get_current_org`, before
+  any route runs, and on the webhook routes that authenticate by query or
+  header.
+- **Tests.** `tests/test_scoped_keys.py`.
+
+**Roles.** There are three roles:
+- `owner`: manages members and keys, and purges;
+- `member`: does everything else;
+- `auditor`: read-only.
+
+A signed-in auditor is refused every non-read request whichever key the
+browser holds (`gateway._enforce_auditor_read_only`). To make that hold without
+the browser too, give an auditor a `read` key rather than the primary key.
+
 **Human sign-in — no passwords exist.** No password storage, no reset flow, no
 password reuse exposure (`saas_layer/user_auth.py:39`). Instead:
 
@@ -63,6 +92,37 @@ password reuse exposure (`saas_layer/user_auth.py:39`). Instead:
   than letting delivery success become an oracle (`gateway.py:686-691`)
 - **No self-service signup.** The first owner of an organization is created
   explicitly; everyone else is invited by an owner (`gateway.py:561-566`)
+
+**Enterprise single sign-on (OpenID Connect)** (`saas_layer/sso.py`,
+`migrations/0009_org_sso.sql`, `tests/test_sso.py`).
+
+- **Setup.** An owner connects the organization's identity provider (Okta,
+  Entra ID, Google Workspace) on the Security page. People then sign in there,
+  or start from their work email and are routed by domain.
+- **Flow.** Authorization code with **PKCE (S256)**. State and nonce are
+  single-use, expire after 10 minutes and are consumed atomically, so a
+  replayed callback loses.
+- **Checks on the id_token.** A callback is refused unless all of these pass:
+  - the algorithm is on the allowlist (RS256 or ES256, so `none` and HS* are
+    refused before any key is used);
+  - the signature verifies against the provider's JWKS;
+  - the issuer, the audience (the client ID) and the expiry are right;
+  - the nonce matches;
+  - the email is not marked unverified;
+  - the email is at one of the organization's **allowed domains**.
+- **Refusals.** A refusal redirects back to sign-in with a short code and
+  nothing else.
+- **Return address.** Only a path on our own app is accepted; `//host`, `/\host`
+  and absolute URLs are refused, so the flow cannot become an open redirect.
+- **Configuration storage.**
+  - Every endpoint must be https and is screened against private and loopback
+    addresses.
+  - The client secret is encrypted at rest (Fernet, key derived from
+    `HMAC_SECRET`) and never returned. Key custody in a KMS is open work.
+  - New people join with a default role of member or auditor, never owner.
+  - Configuring, joining and every SSO sign-in are written to the activity log.
+- **Tests.** 29 tests, each attack among them. Knocking out the domain, replay,
+  return-address or signature check makes them fail.
 
 **Operator console** — separate, cross-tenant, not a customer door.
 Password verified against **scrypt (RFC 7914)**, n=2^15, r=8, with constant-time
@@ -126,6 +186,33 @@ who resolved a finding fails the first question an auditor asks about itself.
 
 ---
 
+## 4a. Activity log and trust center
+
+- **Activity log.** Every administrative change is recorded in `org_activity`
+  (`migrations/0008_org_activity.sql`, `saas_layer/activity.py`):
+  - key created or revoked;
+  - primary key rotated;
+  - member added or removed;
+  - transcripts purged.
+
+  Each entry names the person, or the credential when a machine acted.
+- **Export.** The organization reads it at `GET /saas/orgs/activity` and
+  exports it with `format=csv` for an auditor.
+- **Append-only.** The application has no route that edits or deletes an
+  entry; `tests/test_activity_log.py` checks every write method.
+- **Security & audit page.** The console page (`/security`) shows:
+  - active keys, and those expiring within 14 days;
+  - members by role;
+  - retention;
+  - the key inventory with revoke;
+  - the activity log with export;
+  - the controls in place beside the gaps that are not.
+
+  The gaps come from the API (`gateway.SECURITY_GAPS`), so the page cannot
+  show a reassuring picture without them.
+
+![The Security & audit page](images/security-trust-center.png)
+
 ## 5. Tenant isolation
 
 Every organization-scoped query takes `org_id` from the **resolved credential**,
@@ -158,6 +245,50 @@ act for an organization. Isolation is covered by a dedicated test suite
   prefixes; an unprefixed password or generic key would not match.*
 - **Schema changes** run as a single pre-deploy migration step, not as DDL
   raced by every booting worker.
+- **Security headers on every response**, errors included
+  (`gateway._security_headers`, `tests/test_security_headers.py`):
+  - Strict-Transport-Security (two years, subdomains);
+  - `nosniff`, `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'`;
+  - a CSP that lets the JSON API load nothing (only the interactive docs pages
+    may load the Swagger/ReDoc CDN);
+  - `Referrer-Policy: no-referrer`, a Permissions-Policy that denies camera,
+    microphone, location, payment and USB, and
+    `Cross-Origin-Opener-Policy: same-origin`;
+  - `Cache-Control: no-store` on every `/saas/` response, because those can
+    carry PHI.
+
+  The static app sends the same protections from `render.yaml`, with a CSP
+  that allows only its own scripts.
+
+### Automated checks (CI `security` job)
+
+| Check | Fails the build on | Status at 2026-11-06 |
+| :-- | :-- | :-- |
+| `pip-audit` (Python dependencies) | Any known vulnerability | None found |
+| `pnpm audit --prod` (JavaScript dependencies) | High or critical | **41 advisories (2 critical, 21 high) fixed.** Patched floors were pinned in `pnpm-workspace.yaml`, axios went to 1.20 and zod to 4.6.6; the typecheck, tests and build pass. None remain. |
+| Bandit (static analysis of `saas_layer`) | High severity | No high. Ten medium B608 "SQL built from strings" findings, each read. Every one builds column names from constants in the code and binds every value as a parameter, so none is injectable. One B310 (`urlopen`) on a fixed `https://` URL. |
+| CycloneDX SBOM | — | Published as a build artifact on every run |
+
+A dynamic scan also runs on every pull request and weekly
+(`.github/workflows/dast.yml`). It is an OWASP ZAP API scan of the running API
+from its OpenAPI document, authenticated with a scoped key, and it fails on
+injection, XSS, path traversal, command injection, CRLF and missing protective
+headers (`.zap/rules.tsv`).
+
+**What this is not.** Automated scanning is not a penetration test. No
+third-party test has been done (§7.2).
+
+### Preparation for what code cannot close
+
+All three are self-prepared and labelled as such:
+- [`compliance/THREAT-MODEL.md`](compliance/THREAT-MODEL.md): STRIDE per trust
+  boundary, each mitigation tied to code, and seven residual risks stated.
+- [`compliance/SOC2-CONTROL-MATRIX.md`](compliance/SOC2-CONTROL-MATRIX.md):
+  the Trust Services Criteria mapped to code evidence, with the policy-only
+  and gap rows marked. A readiness starting point, not a report.
+- [`compliance/BAA-TEMPLATE.md`](compliance/BAA-TEMPLATE.md): the
+  164.504(e)-required provisions, laid out for counsel. Not legal advice, not
+  signed, not an offer.
 
 ---
 
