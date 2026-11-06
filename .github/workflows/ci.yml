@@ -139,6 +139,63 @@ jobs:
         working-directory: nhid-clinical
         run: python -m pytest tests/ -q
 
+  security:
+    name: Security — dependency audit, static analysis, SBOM
+    runs-on: ubuntu-latest
+    # Fails the build on a known-vulnerable dependency or a high-severity
+    # static-analysis finding. Medium Bandit findings are printed for review:
+    # the B608 "SQL built from strings" ones were each read on 2026-11-06 and
+    # build identifiers from constants with parameterized values
+    # (docs/ENTERPRISE-SECURITY-REVIEW.md, "Automated checks").
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install the API's dependencies and the scanners
+        working-directory: nhid-clinical
+        run: |
+          pip install -r requirements.txt
+          pip install pip-audit bandit cyclonedx-bom
+
+      - name: Python dependency audit (pip-audit)
+        working-directory: nhid-clinical
+        run: pip-audit -r requirements.txt --progress-spinner off
+
+      - name: Static analysis, fail on high severity (Bandit)
+        working-directory: nhid-clinical
+        run: |
+          bandit -q -r saas_layer -lll -iii
+          bandit -q -r saas_layer -ll -ii --exit-zero
+
+      - name: Software bill of materials (CycloneDX, installed environment)
+        run: cyclonedx-py environment -o sbom-python.cdx.json
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: JavaScript dependency audit (production, high and above)
+        run: pnpm audit --prod --audit-level=high
+
+      - name: JavaScript dependency inventory
+        run: pnpm install --frozen-lockfile && pnpm list -r --prod --depth Infinity --json > deps-javascript.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom-python.cdx.json
+            deps-javascript.json
+
   typescript:
     name: TypeScript — typecheck, tests and frontend build
     runs-on: ubuntu-latest

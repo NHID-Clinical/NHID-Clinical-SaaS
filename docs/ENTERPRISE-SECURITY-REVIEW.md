@@ -187,6 +187,32 @@ act for an organization. Isolation is covered by a dedicated test suite
   prefixes; an unprefixed password or generic key would not match.*
 - **Schema changes** run as a single pre-deploy migration step, not as DDL
   raced by every booting worker.
+- **Security headers on every response**, errors included
+  (`gateway._security_headers`, `tests/test_security_headers.py`):
+  - Strict-Transport-Security (two years, subdomains);
+  - `nosniff`, `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'`;
+  - a CSP that lets the JSON API load nothing (only the interactive docs pages
+    may load the Swagger/ReDoc CDN);
+  - `Referrer-Policy: no-referrer`, a Permissions-Policy that denies camera,
+    microphone, location, payment and USB, and
+    `Cross-Origin-Opener-Policy: same-origin`;
+  - `Cache-Control: no-store` on every `/saas/` response, because those can
+    carry PHI.
+
+  The static app sends the same protections from `render.yaml`, with a CSP
+  that allows only its own scripts.
+
+### Automated checks (CI `security` job)
+
+| Check | Fails the build on | Status at 2026-11-06 |
+| :-- | :-- | :-- |
+| `pip-audit` (Python dependencies) | Any known vulnerability | None found |
+| `pnpm audit --prod` (JavaScript dependencies) | High or critical | **41 advisories (2 critical, 21 high) fixed.** Patched floors were pinned in `pnpm-workspace.yaml`, axios went to 1.20 and zod to 4.6.6; the typecheck, tests and build pass. None remain. |
+| Bandit (static analysis of `saas_layer`) | High severity | No high. Ten medium B608 "SQL built from strings" findings, each read. Every one builds column names from constants in the code and binds every value as a parameter, so none is injectable. One B310 (`urlopen`) on a fixed `https://` URL. |
+| CycloneDX SBOM | — | Published as a build artifact on every run |
+
+**What this is not.** Automated scanning is not a penetration test. No
+third-party test has been done (§7.2).
 
 ---
 

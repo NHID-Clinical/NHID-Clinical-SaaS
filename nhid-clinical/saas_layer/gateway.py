@@ -247,6 +247,42 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# ── Security headers ──────────────────────────────────────────────────────────
+#
+# On every response, errors included (tests/test_security_headers.py). The API
+# serves JSON, so its CSP lets the browser load nothing. The interactive API
+# docs are the one exception: Swagger UI and ReDoc load scripts and styles from
+# their CDN, so those two pages get a policy that allows exactly that.
+_API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+_DOCS_CSP = ("default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+             "font-src https://fonts.gstatic.com; img-src 'self' data: https://fastapi.tiangolo.com "
+             "https://cdn.redoc.ly; connect-src 'self'; worker-src blob:; "
+             "frame-ancestors 'none'; base-uri 'none'")
+_DOCS_PATHS = ("/docs", "/redoc")
+SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+}
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    docs = request.url.path.startswith(_DOCS_PATHS)
+    response.headers.setdefault("Content-Security-Policy", _DOCS_CSP if docs else _API_CSP)
+    # /saas/ responses can carry PHI: never in a shared or browser cache.
+    if request.url.path.startswith("/saas/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def _cors_origins() -> List[str]:
     """Origins allowed to call this API, from CORS_ALLOWED_ORIGINS.
 
