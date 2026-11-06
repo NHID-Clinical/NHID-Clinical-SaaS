@@ -1,0 +1,18 @@
+# ZAP rule actions for the CI baseline (.github/workflows/dast.yml).
+# Format: <rule id><TAB><IGNORE|WARN|FAIL><TAB>(<name>). Unlisted rules WARN.
+# FAIL is reserved for the classes a payer's security review treats as
+# disqualifying, so a red build always means something real.
+40018	FAIL	(SQL Injection)
+40019	FAIL	(SQL Injection - MySQL)
+40020	FAIL	(SQL Injection - Hypersonic)
+40022	FAIL	(SQL Injection - PostgreSQL)
+40012	FAIL	(Cross Site Scripting (Reflected))
+40014	FAIL	(Cross Site Scripting (Persistent))
+6	FAIL	(Path Traversal)
+7	FAIL	(Remote File Inclusion)
+90020	FAIL	(Remote OS Command Injection)
+90019	FAIL	(Server Side Code Injection)
+40003	FAIL	(CRLF Injection)
+10020	FAIL	(Missing Anti-clickjacking Header)
+10021	FAIL	(X-Content-Type-Options Header Missing)
+10038	FAIL	(Content Security Policy Header Not Set)

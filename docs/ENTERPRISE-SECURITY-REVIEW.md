@@ -269,8 +269,26 @@ act for an organization. Isolation is covered by a dedicated test suite
 | Bandit (static analysis of `saas_layer`) | High severity | No high. Ten medium B608 "SQL built from strings" findings, each read. Every one builds column names from constants in the code and binds every value as a parameter, so none is injectable. One B310 (`urlopen`) on a fixed `https://` URL. |
 | CycloneDX SBOM | — | Published as a build artifact on every run |
 
+A dynamic scan also runs on every pull request and weekly
+(`.github/workflows/dast.yml`). It is an OWASP ZAP API scan of the running API
+from its OpenAPI document, authenticated with a scoped key, and it fails on
+injection, XSS, path traversal, command injection, CRLF and missing protective
+headers (`.zap/rules.tsv`).
+
 **What this is not.** Automated scanning is not a penetration test. No
 third-party test has been done (§7.2).
+
+### Preparation for what code cannot close
+
+All three are self-prepared and labelled as such:
+- [`compliance/THREAT-MODEL.md`](compliance/THREAT-MODEL.md): STRIDE per trust
+  boundary, each mitigation tied to code, and seven residual risks stated.
+- [`compliance/SOC2-CONTROL-MATRIX.md`](compliance/SOC2-CONTROL-MATRIX.md):
+  the Trust Services Criteria mapped to code evidence, with the policy-only
+  and gap rows marked. A readiness starting point, not a report.
+- [`compliance/BAA-TEMPLATE.md`](compliance/BAA-TEMPLATE.md): the
+  164.504(e)-required provisions, laid out for counsel. Not legal advice, not
+  signed, not an offer.
 
 ---
 
