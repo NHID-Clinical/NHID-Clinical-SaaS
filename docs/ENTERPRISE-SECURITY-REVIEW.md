@@ -93,6 +93,37 @@ password reuse exposure (`saas_layer/user_auth.py:39`). Instead:
 - **No self-service signup.** The first owner of an organization is created
   explicitly; everyone else is invited by an owner (`gateway.py:561-566`)
 
+**Enterprise single sign-on (OpenID Connect)** (`saas_layer/sso.py`,
+`migrations/0009_org_sso.sql`, `tests/test_sso.py`).
+
+- **Setup.** An owner connects the organization's identity provider (Okta,
+  Entra ID, Google Workspace) on the Security page. People then sign in there,
+  or start from their work email and are routed by domain.
+- **Flow.** Authorization code with **PKCE (S256)**. State and nonce are
+  single-use, expire after 10 minutes and are consumed atomically, so a
+  replayed callback loses.
+- **Checks on the id_token.** A callback is refused unless all of these pass:
+  - the algorithm is on the allowlist (RS256 or ES256, so `none` and HS* are
+    refused before any key is used);
+  - the signature verifies against the provider's JWKS;
+  - the issuer, the audience (the client ID) and the expiry are right;
+  - the nonce matches;
+  - the email is not marked unverified;
+  - the email is at one of the organization's **allowed domains**.
+- **Refusals.** A refusal redirects back to sign-in with a short code and
+  nothing else.
+- **Return address.** Only a path on our own app is accepted; `//host`, `/\host`
+  and absolute URLs are refused, so the flow cannot become an open redirect.
+- **Configuration storage.**
+  - Every endpoint must be https and is screened against private and loopback
+    addresses.
+  - The client secret is encrypted at rest (Fernet, key derived from
+    `HMAC_SECRET`) and never returned. Key custody in a KMS is open work.
+  - New people join with a default role of member or auditor, never owner.
+  - Configuring, joining and every SSO sign-in are written to the activity log.
+- **Tests.** 29 tests, each attack among them. Knocking out the domain, replay,
+  return-address or signature check makes them fail.
+
 **Operator console** — separate, cross-tenant, not a customer door.
 Password verified against **scrypt (RFC 7914)**, n=2^15, r=8, with constant-time
 comparison; only the hash is ever configured (`saas_layer/admin_auth.py:8`, `:44`,

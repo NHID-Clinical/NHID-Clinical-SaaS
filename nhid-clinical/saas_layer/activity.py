@@ -21,6 +21,7 @@ ACTIONS = (
     "key.created", "key.revoked", "primary_key.rotated",
     "member.added", "member.removed",
     "transcripts.purged", "transcript.purged",
+    "sso.configured", "sso.removed", "sso.signed_in", "member.joined_via_sso",
 )
 
 

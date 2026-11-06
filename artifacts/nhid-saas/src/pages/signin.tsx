@@ -19,7 +19,20 @@ import { useMutation } from "@tanstack/react-query";
 
 import { AuthError, authApi } from "@/lib/auth-api";
 import { EntryShell, NotConnected } from "@/components/entry-shell";
-import { API_CONNECTED } from "@/lib/config";
+import { API_CONNECTED, apiUrl } from "@/lib/config";
+
+// What a refused single sign-on means, in words. The API sends back only a
+// short code (gateway._sso_fail), never the detail of which check failed.
+const SSO_ERRORS: Record<string, string> = {
+  domain_not_allowed: "That email domain is not allowed to sign in to this organization.",
+  email_not_verified: "Your identity provider has not verified that email address.",
+  invalid_state: "That sign-in link was already used or has expired. Please start again.",
+  invalid_nonce: "The sign-in could not be verified. Please start again.",
+  invalid_id_token: "Your identity provider's response could not be verified.",
+  token_exchange_failed: "Your identity provider did not complete the sign-in.",
+  provider_error: "Your identity provider declined the sign-in.",
+  no_email: "Your identity provider did not share an email address.",
+};
 
 export default function SignIn() {
   const [email, setEmail] = useState("");
@@ -27,6 +40,35 @@ export default function SignIn() {
   // Set only when the deployment has email sign-in switched off (503). That
   // answer is the same for every address, so showing it reveals nothing.
   const [disabled, setDisabled] = useState<string | null>(null);
+  const [ssoProblem, setSsoProblem] = useState<string | null>(() => {
+    const code = new URLSearchParams(window.location.search).get("sso_error");
+    return code ? (SSO_ERRORS[code] ?? "Single sign-on did not complete. Please start again.") : null;
+  });
+  const [ssoPending, setSsoPending] = useState(false);
+
+  // Ask the API whether this domain uses SSO without following the redirect:
+  // a redirect means yes (then go there for real), a 404 means no.
+  const startSso = async () => {
+    const address = email.trim();
+    if (!address) return;
+    setSsoPending(true);
+    setSsoProblem(null);
+    const url = apiUrl(`/saas/auth/sso/start?email=${encodeURIComponent(address)}`);
+    try {
+      const res = await fetch(url, { redirect: "manual", credentials: "include" });
+      if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+        window.location.assign(url);
+        return;
+      }
+      setSsoProblem(res.status === 404
+        ? "Single sign-on isn't set up for that email domain. Use an email link instead."
+        : "Single sign-on could not start. Use an email link instead.");
+    } catch {
+      setSsoProblem("Single sign-on could not start. Use an email link instead.");
+    } finally {
+      setSsoPending(false);
+    }
+  };
 
   const request = useMutation({
     mutationFn: (address: string) => authApi.requestLink(address),
@@ -95,7 +137,17 @@ export default function SignIn() {
                       style={{ width: "100%", marginTop: 14, padding: "9px 12px" }}>
                 {request.isPending ? "Sending…" : "Email me a link"}
               </button>
+              <button type="button" onClick={startSso}
+                      disabled={ssoPending || !email.trim()}
+                      style={{ width: "100%", marginTop: 8, padding: "9px 12px" }}>
+                {ssoPending ? "Checking…" : "Continue with single sign-on"}
+              </button>
             </form>
+            {ssoProblem && (
+              <div className="notice notice-demo" role="alert" style={{ marginTop: 14 }}>
+                <span>{ssoProblem}</span>
+              </div>
+            )}
           </>
         )}
 

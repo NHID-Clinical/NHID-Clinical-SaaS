@@ -9,9 +9,10 @@
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Download, KeyRound, ListChecks, ScrollText, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, KeyRound, ListChecks, LogIn, ScrollText, ShieldCheck } from "lucide-react";
 import { useApiKey } from "@/hooks/use-nhid";
-import { securityApi, SecurityApiError, type KeyScope, type ScopedKey } from "@/lib/security-api";
+import { apiUrl } from "@/lib/config";
+import { securityApi, SecurityApiError, type KeyScope, type ScopedKey, type SsoConfigInput } from "@/lib/security-api";
 
 const SOON_MS = 14 * 86_400_000;
 
@@ -220,6 +221,106 @@ function KeysCard({ apiKey }: { apiKey: string }) {
   );
 }
 
+const inputStyle: React.CSSProperties = { padding: "6px 8px", fontSize: 13, borderRadius: 6,
+                                          border: "1px solid #cfd8e3", width: "100%" };
+
+function Field({ id, label, children }: { id: string; label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ flex: "1 1 240px" }}>
+      <label htmlFor={id} style={{ display: "block", fontSize: 12, color: "var(--nhid-muted, #5f6b7a)", marginBottom: 4 }}>
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+const EMPTY_SSO: SsoConfigInput = { issuer: "", client_id: "", client_secret: "", authorization_endpoint: "",
+                                     token_endpoint: "", jwks_uri: "", allowed_domains: [], default_role: "member" };
+
+function SsoCard({ apiKey }: { apiKey: string }) {
+  const qc = useQueryClient();
+  const config = useQuery({ queryKey: ["security-sso", apiKey], queryFn: () => securityApi.sso(apiKey) });
+  const [form, setForm] = useState<SsoConfigInput>(EMPTY_SSO);
+  const [domains, setDomains] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [problem, setProblem] = useState<unknown>(null);
+  const done = () => { setEditing(false); setProblem(null);
+                       qc.invalidateQueries({ queryKey: ["security-sso"] });
+                       qc.invalidateQueries({ queryKey: ["security-activity"] }); };
+  const save = useMutation({
+    mutationFn: () => securityApi.saveSso(apiKey, {
+      ...form, client_secret: form.client_secret || undefined,
+      allowed_domains: domains.split(/[\s,]+/).filter(Boolean) }),
+    onSuccess: done, onError: setProblem,
+  });
+  const remove = useMutation({ mutationFn: () => securityApi.removeSso(apiKey), onSuccess: done, onError: setProblem });
+  const set = (k: keyof SsoConfigInput) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm({ ...form, [k]: e.target.value });
+
+  const c = config.data;
+  const showForm = config.data === null || editing;
+  return (
+    <Card title="Single sign-on (OpenID Connect)" icon={LogIn}>
+      {config.isLoading && <Skeleton rows={2} />}
+      {config.isError && <Problem error={config.error} />}
+      {problem != null && <div style={{ marginBottom: 16 }}><Problem error={problem} /></div>}
+      {c && !editing && (
+        <div data-testid="sso-status">
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+            <Pill kind="ok">Configured</Pill>
+            <span style={{ fontSize: 13 }}>{c.issuer}</span>
+          </div>
+          <dl style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "6px 16px", margin: 0, fontSize: 13 }}>
+            <dt style={{ color: "var(--nhid-muted, #5f6b7a)" }}>Allowed domains</dt><dd style={{ margin: 0 }}>{c.allowed_domains.join(", ")}</dd>
+            <dt style={{ color: "var(--nhid-muted, #5f6b7a)" }}>New people join as</dt><dd style={{ margin: 0 }}>{c.default_role}</dd>
+            <dt style={{ color: "var(--nhid-muted, #5f6b7a)" }}>Client ID</dt><dd style={{ margin: 0 }}><code>{c.client_id}</code></dd>
+            <dt style={{ color: "var(--nhid-muted, #5f6b7a)" }}>Client secret</dt>
+            <dd style={{ margin: 0 }}>{c.has_client_secret ? "Client secret stored (encrypted; never shown)" : "None (public client, PKCE only)"}</dd>
+          </dl>
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button type="button" style={buttonStyle} onClick={() => {
+              setForm({ ...EMPTY_SSO, issuer: c.issuer, client_id: c.client_id,
+                        authorization_endpoint: c.authorization_endpoint, token_endpoint: c.token_endpoint,
+                        jwks_uri: c.jwks_uri, default_role: c.default_role });
+              setDomains(c.allowed_domains.join(", ")); setEditing(true); }}>Edit</button>
+            <button type="button" style={buttonStyle} disabled={remove.isPending} onClick={() => remove.mutate()}>Remove</button>
+          </div>
+        </div>
+      )}
+      {config.data !== undefined && showForm && (
+        <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+          {config.data === null && (
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--nhid-muted, #5f6b7a)", lineHeight: 1.6 }}>
+              Single sign-on is not configured. People sign in with an email link. Connect your
+              identity provider (Okta, Entra ID, Google Workspace) so they sign in there instead.
+              Register this callback with your provider: <code>{apiUrl("/saas/auth/sso/callback")}</code>.
+            </p>
+          )}
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
+            <Field id="sso-issuer" label="Issuer"><input id="sso-issuer" style={inputStyle} value={form.issuer} onChange={set("issuer")} placeholder="https://your-idp.example" /></Field>
+            <Field id="sso-client" label="Client ID"><input id="sso-client" style={inputStyle} value={form.client_id} onChange={set("client_id")} /></Field>
+            <Field id="sso-secret" label="Client secret (optional)"><input id="sso-secret" type="password" autoComplete="off" style={inputStyle} value={form.client_secret} onChange={set("client_secret")} /></Field>
+            <Field id="sso-auth" label="Authorization endpoint"><input id="sso-auth" style={inputStyle} value={form.authorization_endpoint} onChange={set("authorization_endpoint")} /></Field>
+            <Field id="sso-token" label="Token endpoint"><input id="sso-token" style={inputStyle} value={form.token_endpoint} onChange={set("token_endpoint")} /></Field>
+            <Field id="sso-jwks" label="JWKS URI"><input id="sso-jwks" style={inputStyle} value={form.jwks_uri} onChange={set("jwks_uri")} /></Field>
+            <Field id="sso-domains" label="Allowed email domains"><input id="sso-domains" style={inputStyle} value={domains} onChange={(e) => setDomains(e.target.value)} placeholder="payer.example, payer-ops.example" /></Field>
+            <Field id="sso-role" label="New people join as">
+              <select id="sso-role" style={inputStyle} value={form.default_role} onChange={set("default_role")}>
+                <option value="member">member</option><option value="auditor">auditor (read-only)</option>
+              </select>
+            </Field>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="submit" style={buttonStyle} disabled={save.isPending}>{save.isPending ? "Saving…" : "Save"}</button>
+            {editing && <button type="button" style={buttonStyle} onClick={() => setEditing(false)}>Cancel</button>}
+          </div>
+        </form>
+      )}
+    </Card>
+  );
+}
+
 function ActivityCard({ apiKey }: { apiKey: string }) {
   const events = useQuery({ queryKey: ["security-activity", apiKey], queryFn: () => securityApi.activity(apiKey) });
   const [problem, setProblem] = useState<unknown>(null);
@@ -322,6 +423,7 @@ export function SecurityPanel({ apiKey }: { apiKey: string }) {
       )}
 
       <KeysCard apiKey={apiKey} />
+      <SsoCard apiKey={apiKey} />
       <ActivityCard apiKey={apiKey} />
     </div>
   );

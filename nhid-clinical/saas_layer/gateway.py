@@ -78,7 +78,7 @@ from saas_layer.admin_auth import (
     verify_password,
     verify_username,
 )
-from saas_layer import activity, audit as audit_svc
+from saas_layer import activity, audit as audit_svc, sso
 from saas_layer.voice_policy import run_voice_policy
 from saas_layer import voice_policy_store
 from saas_layer.voice_sessions import (
@@ -1384,6 +1384,114 @@ async def org_security_summary(org: Dict = Depends(get_current_org)):
         ],
         "gaps": list(SECURITY_GAPS),
     }
+
+
+# ── Enterprise SSO (OpenID Connect) ──────────────────────────────────────────
+#
+# An owner points the organization at its identity provider; people then sign
+# in there (saas_layer/sso.py, migrations/0009_org_sso.sql). Configuring and
+# removing need an owner's session, like keys and members.
+
+
+class SSOConfigRequest(BaseModel):
+    issuer: str
+    client_id: str
+    client_secret: Optional[str] = None
+    authorization_endpoint: str
+    token_endpoint: str
+    jwks_uri: str
+    allowed_domains: List[str]
+    default_role: str = "member"
+
+
+def _sso_redirect_uri(request: Request) -> str:
+    """The callback the provider redirects to. From configuration when set
+    (PUBLIC_API_URL), so it is not taken from the request's Host header."""
+    # PUBLIC_API_URL when set; otherwise Render's own RENDER_EXTERNAL_URL (set
+    # automatically, https). The request's base URL is the last resort: behind
+    # a proxy it can read http:// and would not match what the provider expects.
+    configured = (os.environ.get("PUBLIC_API_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+    if configured and not configured.startswith(("https://", "http://")):
+        configured = f"https://{configured}"
+    base = configured or str(request.base_url).rstrip("/")
+    return f"{base}/saas/auth/sso/callback"
+
+
+@app.put("/saas/orgs/sso", tags=["Org"])
+async def configure_org_sso(body: SSOConfigRequest,
+                            org: Dict = Depends(get_current_org),
+                            user: Dict = Depends(current_user)):
+    _require_owner(org["org_id"], user, "configure single sign-on")
+    try:
+        config = sso.configure(org["org_id"], updated_by=user["email"], **body.model_dump())
+    except oauth_exchange.IssuerConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    activity.record(org["org_id"], actor=user["email"], action="sso.configured",
+                    detail={"issuer": config["issuer"], "allowed_domains": config["allowed_domains"],
+                            "default_role": config["default_role"]})
+    return config
+
+
+@app.get("/saas/orgs/sso", tags=["Org"])
+async def get_org_sso(org: Dict = Depends(get_current_org)):
+    """The SSO configuration, without the client secret."""
+    return {"sso": sso.public_config(org["org_id"])}
+
+
+@app.delete("/saas/orgs/sso", tags=["Org"])
+async def remove_org_sso(org: Dict = Depends(get_current_org),
+                         user: Dict = Depends(current_user)):
+    _require_owner(org["org_id"], user, "remove single sign-on")
+    if not sso.remove(org["org_id"]):
+        raise HTTPException(status_code=404, detail="Single sign-on is not configured")
+    activity.record(org["org_id"], actor=user["email"], action="sso.removed")
+    return {"removed": True}
+
+
+def _sso_fail(code: str) -> RedirectResponse:
+    """Back to the app's sign-in page with a short code and nothing else."""
+    return RedirectResponse(f"{_app_base_url().rstrip('/')}/signin?sso_error={code}", status_code=302)
+
+
+@app.get("/saas/auth/sso/start", tags=["Auth"])
+async def sso_start(request: Request, org_id: Optional[str] = Query(default=None),
+                    email: Optional[str] = Query(default=None),
+                    return_to: Optional[str] = Query(default=None)):
+    """Begin a sign-in at the organization's identity provider, chosen by
+    `org_id` or by the domain of a work `email`."""
+    try:
+        if not org_id:
+            org_id = sso.org_for_email(email or "")
+        url = sso.start(org_id, return_to, _sso_redirect_uri(request))
+    except sso.SSOError as exc:
+        status = {"sso_not_configured": 404, "sso_ambiguous": 409}.get(exc.code, 400)
+        raise HTTPException(status_code=status, detail=exc.code)
+    return RedirectResponse(url, status_code=302)
+
+
+@app.get("/saas/auth/sso/callback", tags=["Auth"])
+async def sso_callback(request: Request, state: str = Query(default=""),
+                       code: str = Query(default=""), error: Optional[str] = Query(default=None)):
+    """The provider returns here. On success: a session, and back to the app."""
+    if error:
+        return _sso_fail("provider_error")
+    try:
+        result = sso.finish(state, code, _sso_redirect_uri(request))
+    except sso.SSOError as exc:
+        _logger.warning("SSO: sign-in refused code=%s", exc.code)
+        return _sso_fail(exc.code)
+    org_id, email = result["org_id"], result["email"]
+    user = user_auth.create_user(email)
+    actor = f"sso:{result['issuer']}"
+    if user_auth.get_membership(org_id, user["user_id"]) is None:
+        user_auth.add_member(org_id, user["user_id"], result["default_role"])
+        activity.record(org_id, actor=actor, action="member.joined_via_sso",
+                        target=user["user_id"],
+                        detail={"email": email, "role": result["default_role"]})
+    activity.record(org_id, actor=email, action="sso.signed_in", target=user["user_id"])
+    response = RedirectResponse(f"{_app_base_url().rstrip('/')}{result['return_to']}", status_code=302)
+    set_session_cookie(response, user_auth.create_session(user["user_id"]))
+    return response
 
 
 @app.post("/saas/orgs/rotate-key")

@@ -31,6 +31,16 @@ export interface ActivityEvent {
   target: string | null; detail: Record<string, unknown>;
 }
 
+export interface SsoConfig {
+  issuer: string; client_id: string; authorization_endpoint: string; token_endpoint: string;
+  jwks_uri: string; allowed_domains: string[]; default_role: "member" | "auditor";
+  has_client_secret: boolean; updated_at: string; updated_by: string | null;
+}
+
+export type SsoConfigInput = Omit<SsoConfig, "has_client_secret" | "updated_at" | "updated_by"> & {
+  client_secret?: string;
+};
+
 export class SecurityApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -71,6 +81,12 @@ export const securityApi = {
   createKey: async (apiKey: string, body: { label: string; scope: KeyScope; expires_in_days: number }) =>
     (await call("/saas/orgs/keys", apiKey, { method: "POST", body: JSON.stringify(body) })).json() as
       Promise<ScopedKey & { api_key: string }>,
+  sso: async (apiKey: string) =>
+    ((await (await call("/saas/orgs/sso", apiKey)).json()) as { sso: SsoConfig | null }).sso,
+  saveSso: async (apiKey: string, body: SsoConfigInput) =>
+    (await call("/saas/orgs/sso", apiKey, { method: "PUT", body: JSON.stringify(body) })).json() as Promise<SsoConfig>,
+  removeSso: async (apiKey: string) =>
+    (await call("/saas/orgs/sso", apiKey, { method: "DELETE" })).json(),
   revokeKey: async (apiKey: string, keyId: string) =>
     (await call(`/saas/orgs/keys/${encodeURIComponent(keyId)}`, apiKey, { method: "DELETE" })).json(),
 };

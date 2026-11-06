@@ -73,6 +73,7 @@ beforeEach(() => {
     "/saas/orgs/security": SUMMARY,
     "/saas/orgs/keys": KEYS,
     "/saas/orgs/activity": ACTIVITY,
+    "/saas/orgs/sso": { sso: null },
   }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -136,5 +137,29 @@ describe("Security & audit", () => {
     const texts = screen.getAllByRole("alert").map((a) => a.textContent ?? "");
     // The API's own reason reaches the reader, not a generic failure.
     expect(texts.some((t) => t.includes("scope is 'ingest'"))).toBe(true);
+  });
+
+  it("shows single sign-on as not configured, with a form to set it up", async () => {
+    renderPanel();
+    expect(await screen.findByText(/single sign-on is not configured/i)).toBeTruthy();
+    expect(screen.getByLabelText(/issuer/i)).toBeTruthy();
+    expect(screen.getByLabelText(/allowed email domains/i)).toBeTruthy();
+  });
+
+  it("shows the configured identity provider without any secret", async () => {
+    vi.stubGlobal("fetch", respond({
+      "/saas/orgs/security": SUMMARY, "/saas/orgs/keys": KEYS, "/saas/orgs/activity": ACTIVITY,
+      "/saas/orgs/sso": { sso: { org_id: "o", issuer: "https://idp.lakeside.example",
+        client_id: "nhid-console", authorization_endpoint: "https://idp.lakeside.example/a",
+        token_endpoint: "https://idp.lakeside.example/t", jwks_uri: "https://idp.lakeside.example/k",
+        allowed_domains: ["lakeside.example"], default_role: "auditor", has_client_secret: true,
+        updated_at: inDays(0), updated_by: "owner@example.org" } },
+    }));
+    renderPanel();
+    const card = await screen.findByTestId("sso-status");
+    expect(card.textContent).toContain("https://idp.lakeside.example");
+    expect(card.textContent).toContain("lakeside.example");
+    expect(card.textContent).toContain("auditor");
+    expect(card.textContent).toContain("Client secret stored");
   });
 });
