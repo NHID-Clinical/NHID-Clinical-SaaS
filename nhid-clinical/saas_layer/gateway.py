@@ -52,6 +52,7 @@ from typing import Optional, Any, Dict, List
 
 from saas_layer.auth import (
     init_db, create_org, validate_api_key, get_org, rotate_api_key,
+    create_scoped_key, list_scoped_keys, revoke_scoped_key,
     list_orgs, increment_usage,
     create_admin_session, validate_admin_session,
     delete_admin_session, purge_expired_admin_sessions,
@@ -77,7 +78,7 @@ from saas_layer.admin_auth import (
     verify_password,
     verify_username,
 )
-from saas_layer import audit as audit_svc
+from saas_layer import activity, audit as audit_svc, sso
 from saas_layer.voice_policy import run_voice_policy
 from saas_layer import voice_policy_store
 from saas_layer.voice_sessions import (
@@ -246,6 +247,42 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# ── Security headers ──────────────────────────────────────────────────────────
+#
+# On every response, errors included (tests/test_security_headers.py). The API
+# serves JSON, so its CSP lets the browser load nothing. The interactive API
+# docs are the one exception: Swagger UI and ReDoc load scripts and styles from
+# their CDN, so those two pages get a policy that allows exactly that.
+_API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+_DOCS_CSP = ("default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+             "font-src https://fonts.gstatic.com; img-src 'self' data: https://fastapi.tiangolo.com "
+             "https://cdn.redoc.ly; connect-src 'self'; worker-src blob:; "
+             "frame-ancestors 'none'; base-uri 'none'")
+_DOCS_PATHS = ("/docs", "/redoc")
+SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+}
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    docs = request.url.path.startswith(_DOCS_PATHS)
+    response.headers.setdefault("Content-Security-Policy", _DOCS_CSP if docs else _API_CSP)
+    # /saas/ responses can carry PHI: never in a shared or browser cache.
+    if request.url.path.startswith("/saas/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def _cors_origins() -> List[str]:
     """Origins allowed to call this API, from CORS_ALLOWED_ORIGINS.
 
@@ -360,33 +397,98 @@ if os.environ.get("NHID_SKIP_SCHEMA_BOOTSTRAP", "").strip() not in ("1", "true",
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
+# Routes an `ingest`-scoped key may call: the ones that put evidence in. It
+# cannot read any of it back, manage members or keys, or resolve findings.
+INGEST_ROUTES = frozenset({
+    ("POST", "/saas/monitor/assessments"),
+    ("POST", "/saas/monitor/ingest"),
+    ("POST", "/saas/monitor/assessments/{assessment_id}/evaluate"),
+    ("POST", "/saas/trace"),
+    ("POST", "/saas/voice/incoming"),
+    ("POST", "/saas/voice/transcript"),
+    ("POST", "/saas/voice/authorize"),
+    ("POST", "/saas/voice/webhook/incoming"),
+    ("POST", "/saas/voice/webhook/transcript"),
+    ("POST", "/saas/pilot/runs"),
+})
+READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _route_path(request: Request) -> str:
+    """The matched route's template (e.g. `/saas/monitor/findings/{finding_id}`),
+    so a scope rule names routes, not whatever IDs a caller put in the URL."""
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or request.url.path
+
+
+def enforce_key_scope(org: Dict[str, Any], method: str, route_path: str) -> None:
+    """Refuse a request the presenting key's scope does not cover (403)."""
+    scope = org.get("_key_scope", "full")
+    if scope == "full":
+        return
+    if scope == "read" and method.upper() in READ_METHODS:
+        return
+    if scope == "ingest" and (method.upper(), route_path) in INGEST_ROUTES:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(f"This API key's scope is '{scope}', which does not cover "
+                f"{method.upper()} {route_path}."),
+    )
+
+
+def _enforce_auditor_read_only(org_id: str, nhid_session: Optional[str], method: str) -> None:
+    """A signed-in member whose role is `auditor` can look and cannot change
+    anything, whichever key the browser happens to hold."""
+    if method.upper() in READ_METHODS or not nhid_session:
+        return
+    user = user_auth.resolve_session(nhid_session)
+    if user is None:
+        return
+    membership = user_auth.get_membership(org_id, user["user_id"])
+    if membership and membership["role"] == user_auth.ROLE_AUDITOR:
+        raise HTTPException(
+            status_code=403,
+            detail="Auditors have read-only access to this organization.",
+        )
+
+
 def get_current_org(
+    request: Request = None,  # injected by FastAPI; None only for direct calls
     x_api_key: Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
+    nhid_session: Optional[str] = Cookie(default=None, alias="nhid_session"),
 ) -> Dict[str, Any]:
     """Resolve the calling organization from one of two machine credentials.
 
     Two paths, X-API-Key checked first and unchanged:
 
-      * `X-API-Key: <key>`          — the original static key (0001).
+      * `X-API-Key: <key>`          — the primary key (0001), or a scoped,
+                                      expiring key (0007);
       * `Authorization: Bearer <t>` — a short-lived token minted by
                                       POST /saas/auth/token (RFC 8693, 0005).
 
     Both resolve to the SAME org dict shape, so no downstream route can tell
     which credential was used, and a request that carries both is authenticated
     by the key — there is no mixing, one credential decides.
+
+    Then two read-only rules apply before any route runs: a scoped key may only
+    do what its scope covers, and a signed-in auditor may only read.
     """
     if x_api_key:
         org = validate_api_key(x_api_key)
         if not org:
-            raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-        return org
-    if authorization and authorization.startswith("Bearer "):
+            raise HTTPException(status_code=403, detail="Invalid, expired or revoked API key")
+    elif authorization and authorization.startswith("Bearer "):
         org = oauth_exchange.resolve_token(authorization[len("Bearer "):].strip())
         if not org:
             raise HTTPException(status_code=403, detail="Invalid or expired token")
-        return org
-    raise HTTPException(status_code=401, detail="X-API-Key header required")
+    else:
+        raise HTTPException(status_code=401, detail="X-API-Key header required")
+    if request is not None:
+        enforce_key_scope(org, request.method, _route_path(request))
+        _enforce_auditor_read_only(org["org_id"], nhid_session, request.method)
+    return org
 
 
 
@@ -976,6 +1078,9 @@ async def invite_org_member(body: InviteMemberRequest,
 
     _logger.info("AUTH: member added org=%s user_id=%s role=%s",
                  org["org_id"], invited["user_id"], body.role)
+    activity.record(org["org_id"], actor=user["email"], action="member.added",
+                    target=invited["user_id"],
+                    detail={"email": invited["email"], "role": body.role})
     return {"user_id": invited["user_id"], "email": invited["email"],
             "role": body.role, "invite_delivered": delivered}
 
@@ -1008,6 +1113,8 @@ async def remove_org_member(member_user_id: str,
     if not user_auth.orgs_for_user(member_user_id):
         user_auth.delete_sessions_for_user(member_user_id)
     _logger.info("AUTH: member removed org=%s user_id=%s", org["org_id"], member_user_id)
+    activity.record(org["org_id"], actor=user["email"], action="member.removed",
+                    target=member_user_id, detail={"role": membership["role"]})
     return {"status": "removed", "user_id": member_user_id}
 
 
@@ -1137,6 +1244,256 @@ async def get_my_org(org: Dict = Depends(get_current_org)):
     }
 
 
+# ── Scoped API keys ───────────────────────────────────────────────────────────
+#
+# Additional keys with a scope and an expiry (migrations/0007). Minting and
+# revoking need an owner's session as well as the organization credential, as
+# member management does: a leaked key must not be able to mint itself a
+# longer-lived sibling.
+
+
+class CreateKeyRequest(BaseModel):
+    label: str
+    scope: str
+    expires_in_days: int = 90
+
+
+@app.post("/saas/orgs/keys", status_code=201, tags=["Org"])
+async def create_org_key(body: CreateKeyRequest,
+                         org: Dict = Depends(get_current_org),
+                         user: Dict = Depends(current_user)):
+    """Mint a scoped, expiring key. The plaintext is in this response only."""
+    _require_owner(org["org_id"], user, "create API keys")
+    try:
+        created = create_scoped_key(
+            org["org_id"], label=body.label, scope=body.scope,
+            expires_in_days=body.expires_in_days, created_by=user["email"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    _logger.info("KEYS: created org=%s key_id=%s scope=%s by=%s",
+                 org["org_id"], created["key_id"], created["scope"], user["user_id"])
+    activity.record(org["org_id"], actor=user["email"], action="key.created",
+                    target=created["key_id"],
+                    detail={"label": created["label"], "scope": created["scope"],
+                            "expires_at": created["expires_at"]})
+    created["note"] = ("Store this now. It is hashed on the server and cannot "
+                       "be shown again.")
+    return created
+
+
+@app.get("/saas/orgs/keys", tags=["Org"])
+async def list_org_keys(org: Dict = Depends(get_current_org)):
+    """Every scoped key, with scope, expiry, revocation and last use. No secrets."""
+    return {"keys": list_scoped_keys(org["org_id"])}
+
+
+@app.delete("/saas/orgs/keys/{key_id}", tags=["Org"])
+async def revoke_org_key(key_id: str,
+                         org: Dict = Depends(get_current_org),
+                         user: Dict = Depends(current_user)):
+    """Revoke a scoped key now. Owner session required."""
+    _require_owner(org["org_id"], user, "revoke API keys")
+    if not revoke_scoped_key(org["org_id"], key_id, revoked_by=user["email"]):
+        raise HTTPException(status_code=404, detail="Key not found or already revoked")
+    _logger.info("KEYS: revoked org=%s key_id=%s by=%s",
+                 org["org_id"], key_id, user["user_id"])
+    activity.record(org["org_id"], actor=user["email"], action="key.revoked", target=key_id)
+    return {"key_id": key_id, "revoked": True}
+
+
+@app.get("/saas/orgs/activity", tags=["Org"])
+async def org_activity(org: Dict = Depends(get_current_org),
+                       format: str = Query(default="json", pattern="^(json|csv)$"),
+                       limit: int = Query(default=1000, ge=1, le=10_000),
+                       since: Optional[str] = Query(default=None)):
+    """Every administrative change to this organization, newest first.
+
+    `format=csv` downloads the same rows as a spreadsheet for an auditor.
+    Read-only: there is no route that edits or deletes an entry.
+    """
+    events = activity.list_events(org["org_id"], limit=limit, since=since)
+    if format == "csv":
+        import csv as _csv
+        import io as _io
+        import json as _json
+        buf = _io.StringIO()
+        writer = _csv.writer(buf)
+        writer.writerow(["occurred_at", "actor", "action", "target", "detail"])
+        for e in events:
+            writer.writerow([e["occurred_at"], e["actor"], e["action"], e["target"] or "",
+                             _json.dumps(e["detail"], sort_keys=True)])
+        return Response(
+            content=buf.getvalue(), media_type="text/csv",
+            headers={"Content-Disposition":
+                     f'attachment; filename="nhid-activity-{org["org_id"]}.csv"'})
+    return {"events": events, "actions": list(activity.ACTIONS)}
+
+
+# What the trust center states is NOT in place. Kept beside the code so the
+# console never shows a reassuring page without them (docs/ENTERPRISE-SECURITY-REVIEW.md §7).
+SECURITY_GAPS = (
+    {"id": "soc2", "title": "No SOC 2 report",
+     "detail": "No SOC 2 Type I or II audit has been performed."},
+    {"id": "baa", "title": "No signed BAA",
+     "detail": "Hosting transcripts that may contain PHI requires a BAA; none is in place."},
+    {"id": "pentest", "title": "No third-party penetration test",
+     "detail": "Automated dependency, static-analysis and header checks run in CI. "
+               "They are not a penetration test."},
+    {"id": "validation", "title": "No independent validation",
+     "detail": "Every published figure is self-measured."},
+)
+
+
+@app.get("/saas/orgs/security", tags=["Org"])
+async def org_security_summary(org: Dict = Depends(get_current_org)):
+    """The trust-center snapshot for this organization: keys, members,
+    retention, recent administrative activity, and the stated gaps."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    now = _dt.now(_tz.utc)
+    keys = [k for k in list_scoped_keys(org["org_id"]) if k["active"]]
+    soon = now + _td(days=14)
+    by_scope: Dict[str, int] = {}
+    for k in keys:
+        by_scope[k["scope"]] = by_scope.get(k["scope"], 0) + 1
+    members = user_auth.list_members(org["org_id"])
+    by_role: Dict[str, int] = {}
+    for m in members:
+        by_role[m["role"]] = by_role.get(m["role"], 0) + 1
+    retention = monitoring.retention_status(org["org_id"])
+    since = (now - _td(days=30)).isoformat()
+    return {
+        "keys": {
+            "active": len(keys),
+            "expiring_within_14_days": sum(
+                1 for k in keys if _dt.fromisoformat(k["expires_at"]) <= soon),
+            "by_scope": by_scope,
+            "primary_key_prefix": org.get("api_key_prefix"),
+        },
+        "members": {"total": len(members), "by_role": by_role},
+        "retention": {"effective_days": retention["retention_days"],
+                      "policy_source": retention["policy_source"],
+                      "transcripts_held": retention["transcripts_held"],
+                      "oldest_held_at": retention["oldest_held_at"]},
+        "activity": {"events_last_30_days": len(
+            activity.list_events(org["org_id"], limit=10_000, since=since))},
+        "controls": [
+            "Scoped, expiring API keys", "Read-only auditor role",
+            "Hash-chained audit trail (HMAC-SHA256)", "Append-only activity log",
+            "Security headers on every response", "Transcript retention with provable purge",
+            "Dependency audit, static analysis and SBOM in CI",
+        ],
+        "gaps": list(SECURITY_GAPS),
+    }
+
+
+# ── Enterprise SSO (OpenID Connect) ──────────────────────────────────────────
+#
+# An owner points the organization at its identity provider; people then sign
+# in there (saas_layer/sso.py, migrations/0009_org_sso.sql). Configuring and
+# removing need an owner's session, like keys and members.
+
+
+class SSOConfigRequest(BaseModel):
+    issuer: str
+    client_id: str
+    client_secret: Optional[str] = None
+    authorization_endpoint: str
+    token_endpoint: str
+    jwks_uri: str
+    allowed_domains: List[str]
+    default_role: str = "member"
+
+
+def _sso_redirect_uri(request: Request) -> str:
+    """The callback the provider redirects to. From configuration when set
+    (PUBLIC_API_URL), so it is not taken from the request's Host header."""
+    # PUBLIC_API_URL when set; otherwise Render's own RENDER_EXTERNAL_URL (set
+    # automatically, https). The request's base URL is the last resort: behind
+    # a proxy it can read http:// and would not match what the provider expects.
+    configured = (os.environ.get("PUBLIC_API_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+    if configured and not configured.startswith(("https://", "http://")):
+        configured = f"https://{configured}"
+    base = configured or str(request.base_url).rstrip("/")
+    return f"{base}/saas/auth/sso/callback"
+
+
+@app.put("/saas/orgs/sso", tags=["Org"])
+async def configure_org_sso(body: SSOConfigRequest,
+                            org: Dict = Depends(get_current_org),
+                            user: Dict = Depends(current_user)):
+    _require_owner(org["org_id"], user, "configure single sign-on")
+    try:
+        config = sso.configure(org["org_id"], updated_by=user["email"], **body.model_dump())
+    except oauth_exchange.IssuerConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    activity.record(org["org_id"], actor=user["email"], action="sso.configured",
+                    detail={"issuer": config["issuer"], "allowed_domains": config["allowed_domains"],
+                            "default_role": config["default_role"]})
+    return config
+
+
+@app.get("/saas/orgs/sso", tags=["Org"])
+async def get_org_sso(org: Dict = Depends(get_current_org)):
+    """The SSO configuration, without the client secret."""
+    return {"sso": sso.public_config(org["org_id"])}
+
+
+@app.delete("/saas/orgs/sso", tags=["Org"])
+async def remove_org_sso(org: Dict = Depends(get_current_org),
+                         user: Dict = Depends(current_user)):
+    _require_owner(org["org_id"], user, "remove single sign-on")
+    if not sso.remove(org["org_id"]):
+        raise HTTPException(status_code=404, detail="Single sign-on is not configured")
+    activity.record(org["org_id"], actor=user["email"], action="sso.removed")
+    return {"removed": True}
+
+
+def _sso_fail(code: str) -> RedirectResponse:
+    """Back to the app's sign-in page with a short code and nothing else."""
+    return RedirectResponse(f"{_app_base_url().rstrip('/')}/signin?sso_error={code}", status_code=302)
+
+
+@app.get("/saas/auth/sso/start", tags=["Auth"])
+async def sso_start(request: Request, org_id: Optional[str] = Query(default=None),
+                    email: Optional[str] = Query(default=None),
+                    return_to: Optional[str] = Query(default=None)):
+    """Begin a sign-in at the organization's identity provider, chosen by
+    `org_id` or by the domain of a work `email`."""
+    try:
+        if not org_id:
+            org_id = sso.org_for_email(email or "")
+        url = sso.start(org_id, return_to, _sso_redirect_uri(request))
+    except sso.SSOError as exc:
+        status = {"sso_not_configured": 404, "sso_ambiguous": 409}.get(exc.code, 400)
+        raise HTTPException(status_code=status, detail=exc.code)
+    return RedirectResponse(url, status_code=302)
+
+
+@app.get("/saas/auth/sso/callback", tags=["Auth"])
+async def sso_callback(request: Request, state: str = Query(default=""),
+                       code: str = Query(default=""), error: Optional[str] = Query(default=None)):
+    """The provider returns here. On success: a session, and back to the app."""
+    if error:
+        return _sso_fail("provider_error")
+    try:
+        result = sso.finish(state, code, _sso_redirect_uri(request))
+    except sso.SSOError as exc:
+        _logger.warning("SSO: sign-in refused code=%s", exc.code)
+        return _sso_fail(exc.code)
+    org_id, email = result["org_id"], result["email"]
+    user = user_auth.create_user(email)
+    actor = f"sso:{result['issuer']}"
+    if user_auth.get_membership(org_id, user["user_id"]) is None:
+        user_auth.add_member(org_id, user["user_id"], result["default_role"])
+        activity.record(org_id, actor=actor, action="member.joined_via_sso",
+                        target=user["user_id"],
+                        detail={"email": email, "role": result["default_role"]})
+    activity.record(org_id, actor=email, action="sso.signed_in", target=user["user_id"])
+    response = RedirectResponse(f"{_app_base_url().rstrip('/')}{result['return_to']}", status_code=302)
+    set_session_cookie(response, user_auth.create_session(user["user_id"]))
+    return response
+
+
 @app.post("/saas/orgs/rotate-key")
 async def rotate_my_key(org: Dict = Depends(get_current_org)):
     """Issue a new API key for the calling org and invalidate the old one.
@@ -1148,12 +1505,19 @@ async def rotate_my_key(org: Dict = Depends(get_current_org)):
     does not store it has to rotate again.
 
     Authenticated with the key being replaced, so only the current holder can
-    do it.
+    do it. A scoped key cannot rotate the primary key it is not.
     """
+    if org.get("_key_id"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the organization's primary key can rotate itself. "
+                   "Revoke a scoped key with DELETE /saas/orgs/keys/{key_id}.")
     new_key = rotate_api_key(org["org_id"])
     if not new_key:
         raise HTTPException(status_code=404, detail="Organization not found.")
     log_request(org["org_id"], "/saas/orgs/rotate-key", "POST", 200, None)
+    activity.record(org["org_id"], actor=activity.actor_for(org),
+                    action="primary_key.rotated")
     return {
         "org_id": org["org_id"],
         "api_key": new_key,
@@ -2073,6 +2437,8 @@ async def voice_webhook_incoming(
         x_nhid_api_key, api_key, "/saas/voice/webhook/incoming"
     )
     org = validate_api_key(api_key)
+    if org:
+        enforce_key_scope(org, request.method, _route_path(request))
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
 
@@ -2173,6 +2539,8 @@ async def voice_webhook_transcript(
         x_nhid_api_key, api_key, "/saas/voice/webhook/transcript"
     )
     org = validate_api_key(api_key)
+    if org:
+        enforce_key_scope(org, request.method, _route_path(request))
     if not org:
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
 
@@ -2913,6 +3281,8 @@ async def monitor_purge_transcripts(
         org["org_id"], before_days=body.before_days)
     _logger.info("RETENTION: org=%s purged=%d by user=%s before_days=%s",
                  org["org_id"], purged, user["user_id"], body.before_days)
+    activity.record(org["org_id"], actor=user["email"], action="transcripts.purged",
+                    detail={"purged": purged, "before_days": body.before_days})
     return {"purged": purged, "before_days": body.before_days,
             "requested_by": user["email"]}
 
@@ -2936,6 +3306,8 @@ async def monitor_purge_one_transcript(
     if purged:
         _logger.info("RETENTION: org=%s interaction=%s purged by user=%s",
                      org["org_id"], interaction_id, user["user_id"])
+        activity.record(org["org_id"], actor=user["email"], action="transcript.purged",
+                        target=interaction_id)
     return {"interaction_id": interaction_id, "purged": purged}
 
 

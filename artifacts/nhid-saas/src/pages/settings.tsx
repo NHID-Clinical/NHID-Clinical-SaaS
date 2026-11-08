@@ -406,7 +406,7 @@ function Members({ apiKey }: { apiKey: string }) {
   const signOut = useSignOut();
 
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"owner" | "member">("member");
+  const [role, setRole] = useState<"owner" | "member" | "auditor">("member");
   const [problem, setProblem] = useState<string | null>(null);
   const [undelivered, setUndelivered] = useState<string | null>(null);
 
@@ -522,12 +522,13 @@ function Members({ apiKey }: { apiKey: string }) {
           />
           <select
             value={role}
-            onChange={(e) => setRole(e.target.value as "owner" | "member")}
+            onChange={(e) => setRole(e.target.value as "owner" | "member" | "auditor")}
             style={{ fontSize: 12.5, padding: "7px 10px", borderRadius: 8,
                      border: "1px solid var(--nhid-border)",
                      background: "rgba(0,0,0,0.2)", color: "var(--nhid-text)" }}
           >
             <option value="member">Member</option>
+            <option value="auditor">Auditor (read-only)</option>
             <option value="owner">Owner</option>
           </select>
           <button type="submit" disabled={invite.isPending || !email.trim()}

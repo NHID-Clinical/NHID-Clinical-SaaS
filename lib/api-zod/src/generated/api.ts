@@ -39,7 +39,7 @@ export const GetCurrentAuthUserResponse = zod.object({
  * @summary Start the browser OIDC login flow
  */
 export const BeginBrowserLoginQueryParams = zod.object({
-  "returnTo": zod.coerce.string().optional().describe('Relative path to redirect to after login (must start with `\/`). Defaults to `\/`.')
+  "returnTo": zod.string().optional().describe('Relative path to redirect to after login (must start with `\/`). Defaults to `\/`.')
 })
 
 
@@ -47,9 +47,9 @@ export const BeginBrowserLoginQueryParams = zod.object({
  * @summary Complete the browser OIDC login flow
  */
 export const HandleBrowserLoginCallbackQueryParams = zod.object({
-  "code": zod.coerce.string().optional(),
-  "state": zod.coerce.string().optional(),
-  "iss": zod.coerce.string().url().optional()
+  "code": zod.string().optional(),
+  "state": zod.string().optional(),
+  "iss": zod.string().url().optional()
 })
 
 

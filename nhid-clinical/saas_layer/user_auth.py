@@ -66,7 +66,10 @@ SESSION_ENTROPY_BYTES = 32
 
 ROLE_OWNER = "owner"
 ROLE_MEMBER = "member"
-ROLES = (ROLE_OWNER, ROLE_MEMBER)
+# Read-only: sees findings, evidence and reports, changes nothing
+# (gateway._enforce_auditor_read_only). For an internal or external auditor.
+ROLE_AUDITOR = "auditor"
+ROLES = (ROLE_OWNER, ROLE_MEMBER, ROLE_AUDITOR)
 
 # Throttling. Mirrors ADMIN_LOGIN_* in auth.py, on its own table so that an
 # attacker hammering the customer sign-in cannot lock the operator out of

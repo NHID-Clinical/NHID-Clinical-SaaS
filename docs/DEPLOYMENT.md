@@ -294,6 +294,14 @@ from the request's `Host` header — honouring that header would let an attacker
 POST a sign-in request with a host they control and have your user mailed a
 genuine link to the attacker's domain.
 
+**Single sign-on.** An owner configures their identity provider on the
+Security page. In the identity provider, register the callback
+`https://<your API host>/saas/auth/sso/callback`. The API builds that URL from
+`PUBLIC_API_URL` if set, otherwise from Render's own `RENDER_EXTERNAL_URL`, and
+never from the request's `Host` header. Set `PUBLIC_API_URL` when the API sits
+behind a custom domain. `APP_BASE_URL` must be set, because a completed sign-in
+returns there.
+
 4. **If the app and the API are on different subdomains**, scope the session
    cookie to the parent:
 

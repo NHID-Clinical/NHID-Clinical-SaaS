@@ -1,0 +1,103 @@
+name: DAST (OWASP ZAP API scan)
+
+# Dynamic scan of the running API, on every pull request into main and weekly.
+# It starts the real API against a throwaway Postgres, mints a scoped `full`
+# key (which by design cannot rotate the primary key, so the scan cannot lock
+# itself out), and runs ZAP's API scan from the OpenAPI document with that key.
+#
+# FAIL rules (.zap/rules.tsv): injection, XSS, path traversal, command
+# injection, CRLF, and missing clickjacking, nosniff or CSP headers. Everything
+# else is reported as a warning in the uploaded report.
+#
+# This is an automated scan. It is not a penetration test, and the security
+# review says so (docs/ENTERPRISE-SECURITY-REVIEW.md).
+
+on:
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: dast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zap:
+    name: ZAP API scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nhid_dast
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nhid_dast
+      HMAC_SECRET: dast-only-hmac-secret-not-for-any-deployment
+      ADMIN_PASS: dast-only-admin-password-not-for-any-deployment
+      EMAIL_BACKEND: log
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install and migrate
+        working-directory: nhid-clinical
+        run: |
+          pip install -r requirements.txt
+          python scripts/migrate.py
+
+      - name: Start the API
+        working-directory: nhid-clinical
+        run: |
+          nohup python -m uvicorn saas_main:app --host 0.0.0.0 --port 8010 > /tmp/api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:8010/health && break; sleep 2; done
+          curl -sf http://localhost:8010/openapi.json > /dev/null
+
+      - name: Mint a scoped key for the scan
+        id: key
+        working-directory: nhid-clinical
+        run: |
+          KEY=$(python -c "
+          from saas_layer.auth import create_org, create_scoped_key
+          o = create_org('DAST scan org', 'free')
+          print(create_scoped_key(o['org_id'], label='zap', scope='full', expires_in_days=1, created_by='ci')['api_key'])
+          ")
+          echo "::add-mask::$KEY"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: ZAP API scan
+        run: |
+          mkdir -p zap && cp .zap/rules.tsv zap/ && chmod -R 777 zap
+          docker run --network host -v "$PWD/zap:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py -t http://localhost:8010/openapi.json -f openapi \
+              -c rules.tsv -r zap-report.html -J zap-report.json -I \
+              -z "-config replacer.full_list(0).description=apikey \
+                  -config replacer.full_list(0).enabled=true \
+                  -config replacer.full_list(0).matchtype=REQ_HEADER \
+                  -config replacer.full_list(0).matchstr=X-API-Key \
+                  -config replacer.full_list(0).regex=false \
+                  -config replacer.full_list(0).replacement=${{ steps.key.outputs.key }}"
+
+      - name: API log (on failure)
+        if: failure()
+        run: tail -100 /tmp/api.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-report
+          path: zap/zap-report.*

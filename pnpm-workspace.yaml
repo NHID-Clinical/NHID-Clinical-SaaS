@@ -64,7 +64,7 @@ catalog:
   tsx: ^4.21.0
   vite: ^7.3.2
   wouter: ^3.3.5
-  zod: ^3.25.76
+  zod: ^4.6.6
 
 autoInstallPeers: false
 
@@ -162,3 +162,13 @@ overrides:
   # the CJS-compatible 3.x line. Moved here from that package because pnpm only
   # honours `overrides` at the workspace root.
   "tailwindcss>nanoid": "3.3.7"
+  # Security floors (pnpm audit, 2026-11-06). Each pins the patched release
+  # within the major line already in use, so no API changes.
+  "proxy-addr": "^2.0.8"
+  "body-parser@1": "^1.20.9"
+  "body-parser@2": "^2.4.0"
+  "fast-uri": "^3.1.9"
+  "follow-redirects": "^1.16.2"
+  "qs": "^6.16.1"
+  "dompurify": "^3.4.17"
+  "katex": "^0.18.2"

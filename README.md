@@ -8,7 +8,7 @@ Ingest the calls you already receive. Evaluate them against five deterministic c
 Keep the evidence for what happened.
 
 [![CI](https://github.com/NHID-Clinical/NHID-Clinical-SaaS/actions/workflows/ci.yml/badge.svg)](https://github.com/NHID-Clinical/NHID-Clinical-SaaS/actions)
-![Tests](https://img.shields.io/badge/tests-484%20passing-0e7a57?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-554%20passing-0e7a57?style=flat-square)
 ![Python](https://img.shields.io/badge/python-3.11-1b5e9c?style=flat-square)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-1b5e9c?style=flat-square)
 ![React](https://img.shields.io/badge/React%2018-TypeScript-53d8fb?style=flat-square)
@@ -103,7 +103,7 @@ flowchart TB
 |---|---|---|
 | **machine** | organization API key, SHA-256 at rest | ingest pipelines, scripts, CI |
 | **machine, from your IdP** | RFC 8693 token exchange: an Okta / Entra / OIDC JWT buys a short-lived, revocable NHID token | backends whose security review requires every machine credential to originate from the organization's own identity provider |
-| **human** | magic-link session, httpOnly cookie | people opening `/ops` in a browser |
+| **human** | magic-link session, or **single sign-on** through your IdP (OIDC, PKCE, allowed domains only); httpOnly cookie | people opening `/ops` in a browser |
 
 The key is what a vendor's exporter authenticates with. The exchanged token is
 the same thing for an organization that cannot hold a static shared key: the
@@ -171,7 +171,12 @@ Nothing is deployed today. That document is the procedure, not a record.
 
 | | |
 |---|---|
-| **484 passed, 18 skipped** | on a live Postgres 16 built only by `scripts/migrate.py` (measured 2026-10-16). The 18 skips are the integration harness, which needs a running server |
+| **554 passed, 18 skipped** | on a live Postgres 16 built only by `scripts/migrate.py` (measured 2026-11-06). The 18 skips are the integration harness, which needs a running server |
+| **Scoped keys and roles** | 16 tests: `ingest` / `read` / `full` keys that expire and revoke, and a read-only `auditor` role, enforced before any route runs |
+| **Single sign-on** | 29 tests with a fake IdP at the network boundary: forged signature, `alg:none`, wrong issuer, audience or nonce, expired token, unverified email, foreign domain, replayed or expired state, open redirect |
+| **Activity log and trust center** | 12 tests: every key, member, purge and SSO change recorded with who did it, exportable as CSV, and not editable |
+| **Security headers** | 6 tests: HSTS, CSP, frame denial, nosniff and `no-store` on every response, errors included |
+| **Supply chain and DAST** | CI fails on a vulnerable dependency (`pip-audit`, `pnpm audit`), a high Bandit finding, or a ZAP scan finding injection or XSS; an SBOM per build |
 | **Workspace isolation** | 15 tests; found and fixed a real cross-org write bug |
 | **Admin surface** | 31 tests; every route refuses an unauthenticated and a fabricated token |
 | **Sign-in** | 30 tests; single-use links, no email enumeration, and a name on every review |
@@ -191,10 +196,14 @@ Nothing is deployed today. That document is the procedure, not a record.
   deployment compliant — that is a property of an organization and its agreements,
   not of software. Synthetic and test data only until a deployment has been
   separately validated.
-- **No passwords, no SSO for people.** People sign in with a link to their
-  mailbox; there is no self-service sign-up, and roles stop at `owner` /
-  `member`. SAML, SCIM and per-user API keys are not here. Machine credentials
-  can come from your IdP (token exchange above); a human sign-in cannot, yet.
+- **No passwords; OIDC single sign-on, not SAML or SCIM.** People sign in with a
+  mailbox link or through their IdP over OpenID Connect. There is no
+  self-service sign-up. Roles are `owner` / `member` / `auditor`. SAML and SCIM
+  provisioning are not here.
+- **No SOC 2, BAA or penetration test.** The preparation is in
+  [`docs/compliance/`](docs/compliance/): a threat model, a SOC 2 readiness
+  matrix and a BAA template for counsel. All are self-prepared and none is an
+  attestation.
 - **No issuer discovery.** An IdP must be configured by an owner before any of
   its tokens are accepted; an unconfigured issuer is refused, never discovered.
   DNS rebinding of a configured `jwks_uri` is out of scope and said so.
